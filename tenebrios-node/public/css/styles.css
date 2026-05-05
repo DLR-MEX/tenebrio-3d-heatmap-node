@@ -433,5 +433,225 @@ body.immersive #scene-container {
     .mode-toggle button { padding: 3px 7px; font-size: 0.45rem; }
 }
 
+/* ============================================================
+   VISTA IA — predicción +3min (sidecar Python via /api/predictor/*)
+   Paleta: misma de Danny (dorado #E8B830 + azul oscuro #1a2630/#243B4A).
+   ============================================================ */
 
+/* Toggle del header (3D ↔ IA) */
+.view-toggle {
+    display: flex;
+    border-radius: 6px;
+    overflow: hidden;
+    border: 1px solid #3a5a6a;
+    margin: 0 8px;
+}
+.view-toggle button {
+    background: #243B4A; color: #8aa0b0; border: none;
+    padding: 4px 10px; font-size: 0.55rem; cursor: pointer;
+    font-weight: 600; letter-spacing: 1px; text-transform: uppercase;
+    font-family: inherit;
+    transition: background 0.15s, color 0.15s;
+}
+.view-toggle button:hover { background: #2d4a5d; color: #e8e0d8; }
+.view-toggle button.active { background: #E8B830; color: #1a2630; }
 
+/* Utilidad: oculta vista cuando inactiva */
+.hidden { display: none !important; }
+
+/* Contenedor raíz vista IA — ocupa el mismo espacio que .dashboard */
+.ai-dashboard {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    background:
+        radial-gradient(900px 450px at 80% -10%, rgba(232,184,48,0.06), transparent 60%),
+        radial-gradient(700px 400px at 5% 100%, rgba(56,189,248,0.05), transparent 60%),
+        #1a2630;
+    color: #e8e0d8;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.ai-header {
+    position: sticky; top: 0; z-index: 5;
+    display: flex; align-items: center; gap: 24px;
+    padding: 14px 24px;
+    background: rgba(36,59,74,0.85);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-bottom: 1px solid #3a5a6a;
+}
+.ai-brand { display: flex; align-items: center; gap: 12px; }
+.ai-brand-mark {
+    width: 28px; height: 28px;
+    border-radius: 8px;
+    background: linear-gradient(135deg, #E8B830 0%, #d4941e 60%, #8a5e10 100%);
+    box-shadow: 0 0 20px rgba(232,184,48,0.35);
+    position: relative;
+}
+.ai-brand-mark::after {
+    content: '';
+    position: absolute; inset: 5px;
+    border-radius: 4px;
+    background: #1a2630;
+    background-image: linear-gradient(135deg, rgba(232,184,48,0.18), rgba(56,189,248,0.12));
+}
+.ai-brand-title {
+    font-size: 0.85rem; font-weight: 700; letter-spacing: 0.5px;
+    color: #fff;
+}
+.ai-brand-title span { color: #E8B830; }
+.ai-brand-sub {
+    font-size: 0.5rem; color: #8aa0b0;
+    text-transform: uppercase; letter-spacing: 3px;
+}
+
+.ai-meta { margin-left: auto; display: flex; align-items: center; gap: 24px; font-size: 0.6rem; }
+.ai-meta-item { display: flex; align-items: center; gap: 8px; color: #8aa0b0; }
+.ai-meta-item span:last-child {
+    color: #e8e0d8;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+.ai-status-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #607888;
+    transition: background 0.25s, box-shadow 0.25s;
+}
+.ai-status-dot.live {
+    background: #34d399;
+    box-shadow: 0 0 0 0 rgba(52,211,153,0.6);
+    animation: ai-pulse 2s ease-out infinite;
+}
+.ai-status-dot.dead { background: #ef4444; }
+@keyframes ai-pulse {
+    0%   { box-shadow: 0 0 0 0    rgba(52,211,153,0.5); }
+    70%  { box-shadow: 0 0 0 9px  rgba(52,211,153,0);   }
+    100% { box-shadow: 0 0 0 0    rgba(52,211,153,0);   }
+}
+
+.ai-main {
+    max-width: 1600px; margin: 0 auto;
+    padding: 24px; display: flex; flex-direction: column; gap: 32px;
+}
+
+.ai-section { display: flex; flex-direction: column; gap: 14px; }
+.ai-section-head { display: flex; align-items: baseline; gap: 14px; }
+.ai-section-head h2 {
+    font-size: 1rem; font-weight: 700; letter-spacing: 0.3px;
+    color: #fff; margin: 0;
+    border: none; padding: 0;
+}
+.ai-section-sub { font-size: 0.6rem; color: #8aa0b0; }
+.ai-buffer-chip {
+    margin-left: auto;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 0.55rem; color: #8aa0b0;
+    padding: 4px 10px; border-radius: 999px;
+    background: rgba(36,59,74,0.6); border: 1px solid #3a5a6a;
+    display: none;
+}
+.ai-buffer-chip.visible { display: inline-flex; }
+
+.ai-cards-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0,1fr));
+    gap: 10px;
+}
+@media (min-width: 640px)  { .ai-cards-grid { grid-template-columns: repeat(3, minmax(0,1fr)); } }
+@media (min-width: 1024px) { .ai-cards-grid { grid-template-columns: repeat(6, minmax(0,1fr)); } }
+
+.ai-sensor {
+    position: relative; overflow: hidden;
+    padding: 14px 14px 12px;
+    border-radius: 10px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0.008));
+    border: 1px solid #3a5a6a;
+    transition: transform 0.2s ease, border-color 0.25s ease;
+}
+.ai-sensor:hover { border-color: #E8B830; transform: translateY(-1px); }
+.ai-sensor[data-flash="1"] { animation: ai-flash 0.6s ease-out; }
+.ai-sensor::before {
+    content: ''; position: absolute;
+    left: 0; top: 14px; bottom: 14px; width: 2px;
+    border-radius: 2px;
+    background: var(--hue, #E8B830); opacity: 0.7;
+}
+.ai-sensor-row { display: flex; align-items: center; justify-content: space-between; }
+.ai-sensor-label {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 0.55rem; letter-spacing: 0.12em;
+    text-transform: uppercase; color: #8aa0b0;
+}
+.ai-sensor-value {
+    font-size: 1.45rem; font-weight: 700;
+    letter-spacing: -0.02em; line-height: 1.05;
+    margin-top: 4px;
+    color: #fff;
+    font-variant-numeric: tabular-nums;
+    font-family: 'Orbitron', sans-serif;
+}
+.ai-sensor-pred {
+    font-size: 0.6rem; color: #a1aab0; margin-top: 4px;
+    font-variant-numeric: tabular-nums;
+}
+.ai-sensor-pred .arrow { color: #607888; margin-right: 4px; }
+.ai-sensor-pred .pred-suffix { color: #607888; font-size: 0.5rem; margin-left: 4px; }
+.ai-sensor-delta {
+    display: inline-flex; align-items: center; gap: 3px;
+    padding: 2px 7px; border-radius: 999px;
+    font-size: 0.5rem; font-weight: 600;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    letter-spacing: 0.04em;
+}
+.ai-sensor-delta.up   { background: rgba(244,114,92,0.12); color: #fca5a5; border: 1px solid rgba(244,114,92,0.25); }
+.ai-sensor-delta.down { background: rgba(56,189,248,0.12); color: #7dd3fc; border: 1px solid rgba(56,189,248,0.25); }
+.ai-sensor-delta.flat { background: rgba(255,255,255,0.04); color: #8aa0b0; border: 1px solid #3a5a6a; }
+.ai-sensor-spark { margin-top: 10px; height: 28px; }
+@keyframes ai-flash {
+    0%   { background-color: rgba(232,184,48,0.10); }
+    100% { background-color: transparent; }
+}
+
+.ai-chart-card {
+    padding: 18px;
+    border-radius: 10px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0.008));
+    border: 1px solid #3a5a6a;
+}
+.ai-chart-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 8px;
+}
+.ai-chart-eyebrow {
+    font-size: 0.5rem; text-transform: uppercase;
+    letter-spacing: 0.18em; color: #607888;
+}
+.ai-chart-title { font-size: 0.7rem; color: #a1aab0; }
+.ai-chart-title .muted { color: #607888; }
+.ai-chart-unit {
+    font-size: 0.5rem; color: #607888;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+.ai-chart { width: 100%; height: 300px; }
+
+.ai-footer {
+    max-width: 1600px; margin: 0 auto;
+    padding: 24px; display: flex; align-items: center; gap: 12px;
+    font-size: 0.55rem; color: #607888;
+}
+.ai-footer-dot { width: 4px; height: 4px; border-radius: 50%; background: #3a5a6a; }
+.ai-footer-version {
+    margin-left: auto;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+/* Responsive: en móvil, header IA apila */
+@media (max-width: 640px) {
+    .ai-header { flex-direction: column; align-items: flex-start; gap: 8px; padding: 10px 14px; }
+    .ai-meta { margin-left: 0; flex-wrap: wrap; gap: 12px; }
+    .ai-main { padding: 14px; gap: 20px; }
+    .ai-chart { height: 220px; }
+    .view-toggle { margin: 4px 0; }
+    .view-toggle button { padding: 3px 7px; font-size: 0.5rem; }
+}

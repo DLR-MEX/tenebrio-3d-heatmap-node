@@ -42,6 +42,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
 
+// Sidecar Python (ai-predictor): se ejecuta en otro proceso. El frontend
+// nunca lo llama directo; este server lo proxea para que el usuario solo
+// vea localhost:5000 y el sidecar permanezca en 127.0.0.1.
+const AI_PREDICTOR_BASE = process.env.AI_PREDICTOR_BASE || 'http://127.0.0.1:8000';
+
 let _engine = null;
 let _mqttStatusFn = () => false;
 
@@ -293,6 +298,69 @@ export function createApp() {
       volume_data: tempVol,
       humidity_volume_data: humVol,
     });
+  });
+
+  // --- /api/predictor/state -------------------------------------------------
+  // Proxy hacia el sidecar Python (FastAPI). Devuelve el snapshot del
+  // predictor (current/predicted/history). Si el sidecar esta caido, el
+  // frontend recibe 503 y muestra el indicador "offline" sin romper la UI 3D.
+  app.get('/api/predictor/state', async (req, res) => {
+    try {
+      const upstream = await fetch(`${AI_PREDICTOR_BASE}/api/state`);
+      if (!upstream.ok) {
+        return res.status(upstream.status).json({ error: 'predictor upstream error' });
+      }
+      const data = await upstream.json();
+      res.set('Cache-Control', 'no-store');
+      res.json(data);
+    } catch (err) {
+      logger.warn(`predictor state unreachable: ${err.message}`);
+      res.status(503).json({ error: 'predictor offline' });
+    }
+  });
+
+  // --- /api/predictor/stream ------------------------------------------------
+  // Proxy SSE: pasa-through del stream del sidecar. Mantiene los eventos
+  // (snapshot/update/ping) sin transformar; el cliente los consume con
+  // EventSource exactamente igual que si hablara directo con FastAPI.
+  app.get('/api/predictor/stream', async (req, res) => {
+    let upstream;
+    try {
+      upstream = await fetch(`${AI_PREDICTOR_BASE}/api/stream`, {
+        headers: { Accept: 'text/event-stream' },
+      });
+    } catch (err) {
+      logger.warn(`predictor stream unreachable: ${err.message}`);
+      return res.status(503).json({ error: 'predictor offline' });
+    }
+    if (!upstream.ok || !upstream.body) {
+      return res.status(upstream.status || 502).json({ error: 'predictor upstream error' });
+    }
+
+    res.set({
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-store',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    res.flushHeaders?.();
+
+    const reader = upstream.body.getReader();
+    req.on('close', () => {
+      try { reader.cancel(); } catch {}
+    });
+
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (value) res.write(value);
+      }
+    } catch (err) {
+      logger.warn(`predictor stream interrumpido: ${err.message}`);
+    } finally {
+      try { res.end(); } catch {}
+    }
   });
 
   return app;

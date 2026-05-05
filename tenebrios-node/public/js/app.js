@@ -11,6 +11,7 @@ console.log('%cTENEBRIO frontend build 2026-04-27-v31 (inmersión: tablero hover
 import { initScene, buildScene, isReady } from './scene.js';
 import { updateDashboard, updateIndicators, updateConnectionStatus } from './indicators.js';
 import { initHistoryUI, isHistoryMode, setLiveDataProvider } from './history.js';
+import { initPredictorView, activatePredictorView, deactivatePredictorView } from './predictor/index.js';
 
 const FETCH_TIMEOUT_MS = 5000;
 let REFRESH_MS = 2000;
@@ -34,12 +35,41 @@ window.addEventListener('DOMContentLoaded', async () => {
     setupModeButtons();
     setupExpandButton();
     setupImmersivePanel();
+    setupViewToggle();
+    initPredictorView();
     initHistoryUI({ onFrame: handleHistoryFrame });
     setLiveDataProvider(() => lastData);
 
     fetchData();
     setInterval(fetchData, REFRESH_MS);
 });
+
+// Alternancia entre vista 3D y vista IA. Solo cambia visibilidad de
+// contenedores; el motor 3D y el predictor siguen vivos en background
+// para que cambiar de vista sea instantáneo y no perdamos historial.
+function setupViewToggle() {
+    const buttons = document.querySelectorAll('.view-toggle button');
+    const view3d = document.getElementById('view-3d');
+    const viewAi = document.getElementById('view-ai');
+    if (!buttons.length || !view3d || !viewAi) return;
+
+    buttons.forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const target = btn.dataset.view;
+            buttons.forEach((b) => b.classList.toggle('active', b.dataset.view === target));
+            const showAi = target === 'view-ai';
+            view3d.classList.toggle('hidden', showAi);
+            viewAi.classList.toggle('hidden', !showAi);
+            if (showAi) {
+                activatePredictorView();
+            } else {
+                deactivatePredictorView();
+                // Forzar resize del canvas Babylon al volver del modo IA
+                setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
+            }
+        });
+    });
+}
 
 function setupModeButtons() {
     const buttons = document.querySelectorAll('.mode-toggle button');

@@ -1,0 +1,23 @@
+[project]
+name = "demo01"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi[standard]>=0.135.3",
+    "httpx>=0.28.1",
+    "joblib>=1.5.3",
+    "langchain-anthropic>=1.4.0",
+    "langchain-openai>=1.1.13",
+    "langgraph>=1.1.6",
+    "matplotlib>=3.10.9",
+    "numpy>=2.4.4",
+    "paho-mqtt>=2.1.0",
+    "pandas>=3.0.2",
+    "python-dotenv>=1.0.1",
+    "python-multipart>=0.0.26",
+    "scikit-learn>=1.8.0",
+    "sse-starlette>=3.3.4",
+    "tensorflow>=2.21.0",
+]

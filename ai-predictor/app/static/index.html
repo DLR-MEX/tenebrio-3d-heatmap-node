@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="es" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tenebris AI Sentinel · Live</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+            mono: ['JetBrains Mono', 'ui-monospace', 'monospace'],
+          },
+          colors: {
+            base: {
+              900: '#07080d',
+              800: '#0c0e15',
+              700: '#11141d',
+              600: '#171b25',
+            },
+          },
+          animation: {
+            'pulse-soft': 'pulse-soft 2s ease-in-out infinite',
+            'fade-in': 'fade-in 0.4s ease-out',
+            'flash': 'flash 0.6s ease-out',
+          },
+        },
+      },
+    };
+  </script>
+</head>
+<body class="font-sans text-zinc-100 antialiased">
+  <div class="bg-orb"></div>
+
+  <header class="relative z-10 border-b border-white/5 backdrop-blur-xl bg-base-900/60 sticky top-0">
+    <div class="max-w-[1600px] mx-auto px-6 py-4 flex items-center gap-6">
+      <div class="flex items-center gap-3">
+        <div class="brand-mark"></div>
+        <div>
+          <div class="text-[15px] font-semibold tracking-tight">Tenebris <span class="text-cyan-400">AI</span> Sentinel</div>
+          <div class="text-[11px] text-zinc-500 uppercase tracking-[0.2em]">live · forecast +3min</div>
+        </div>
+      </div>
+
+      <div class="ml-auto flex items-center gap-6 text-xs">
+        <div class="flex items-center gap-2">
+          <span class="text-zinc-500">device</span>
+          <span id="device-label" class="font-mono text-zinc-300">—</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span id="status-dot" class="w-2 h-2 rounded-full bg-zinc-600"></span>
+          <span id="status-text" class="text-zinc-400">conectando…</span>
+        </div>
+        <div class="flex items-center gap-2 text-zinc-500">
+          <span>last update</span>
+          <span id="last-update" class="font-mono text-zinc-300">—</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="relative z-10 max-w-[1600px] mx-auto px-6 py-8 space-y-10">
+
+    <section id="group-temp" class="space-y-5">
+      <div class="flex items-baseline gap-4">
+        <h2 class="text-xl font-semibold tracking-tight">Temperatura</h2>
+        <div class="text-xs text-zinc-500">6 sensores · ventana 30 min · horizonte +3 min</div>
+        <div id="buffer-temp" class="ml-auto buffer-chip"></div>
+      </div>
+      <div id="cards-temp" class="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-6"></div>
+      <div class="card p-4 lg:p-5">
+        <div class="flex items-center justify-between mb-2">
+          <div>
+            <div class="text-[11px] uppercase tracking-[0.18em] text-zinc-500">señal</div>
+            <div class="text-sm text-zinc-400">real <span class="text-zinc-600">vs</span> predicho +3min</div>
+          </div>
+          <div class="text-[10px] text-zinc-600 font-mono">°C</div>
+        </div>
+        <div id="chart-temp" class="w-full h-[300px]"></div>
+      </div>
+    </section>
+
+    <section id="group-hum" class="space-y-5">
+      <div class="flex items-baseline gap-4">
+        <h2 class="text-xl font-semibold tracking-tight">Humedad</h2>
+        <div class="text-xs text-zinc-500">6 sensores · ventana 30 min · horizonte +3 min</div>
+        <div id="buffer-hum" class="ml-auto buffer-chip"></div>
+      </div>
+      <div id="cards-hum" class="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-6"></div>
+      <div class="card p-4 lg:p-5">
+        <div class="flex items-center justify-between mb-2">
+          <div>
+            <div class="text-[11px] uppercase tracking-[0.18em] text-zinc-500">señal</div>
+            <div class="text-sm text-zinc-400">real <span class="text-zinc-600">vs</span> predicho +3min</div>
+          </div>
+          <div class="text-[10px] text-zinc-600 font-mono">%</div>
+        </div>
+        <div id="chart-hum" class="w-full h-[300px]"></div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="relative z-10 max-w-[1600px] mx-auto px-6 py-8 text-[11px] text-zinc-600 flex items-center gap-3">
+    <div class="w-1 h-1 rounded-full bg-zinc-700"></div>
+    <span>Modelo dual GRU · entrenado con predicción diferencial</span>
+    <span class="ml-auto font-mono">v0.1</span>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

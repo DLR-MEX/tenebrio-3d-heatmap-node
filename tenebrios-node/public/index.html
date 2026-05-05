@@ -22,6 +22,10 @@
         <div class="header-center">
             <span id="mqtt-timestamp">--</span>
         </div>
+        <div class="view-toggle">
+            <button id="btn-view-3d" class="active" data-view="view-3d">🌐 Vista 3D</button>
+            <button id="btn-view-ai" data-view="view-ai">🤖 IA +3min</button>
+        </div>
         <div class="header-right">
             <div class="condor-logo">
                 <span class="condor-ing">Ingenieria</span>
@@ -35,7 +39,7 @@
         </div>
     </div>
 
-    <div class="dashboard">
+    <div class="dashboard" id="view-3d">
         <div class="main-row">
             <div class="render-column">
                 <div id="scene-container" style="position:relative;">
@@ -160,10 +164,79 @@
         </div>
     </div>
 
+    <!-- Vista IA (predicción +3min). Oculta por defecto; el toggle del header
+         alterna su visibilidad con #view-3d. Backend Python sidecar via
+         /api/predictor/* (proxy en server.js). -->
+    <div class="ai-dashboard hidden" id="view-ai">
+        <header class="ai-header">
+            <div class="ai-brand">
+                <div class="ai-brand-mark"></div>
+                <div>
+                    <div class="ai-brand-title">Tenebris <span>AI</span> Sentinel</div>
+                    <div class="ai-brand-sub">live · forecast +3min</div>
+                </div>
+            </div>
+            <div class="ai-meta">
+                <div class="ai-meta-item"><span>device</span><span id="ai-device-label">—</span></div>
+                <div class="ai-meta-item"><span id="ai-status-dot" class="ai-status-dot"></span><span id="ai-status-text">conectando…</span></div>
+                <div class="ai-meta-item"><span>last update</span><span id="ai-last-update">—</span></div>
+            </div>
+        </header>
+
+        <main class="ai-main">
+            <section class="ai-section" id="ai-group-temp">
+                <div class="ai-section-head">
+                    <h2>Temperatura</h2>
+                    <span class="ai-section-sub">6 sensores · ventana 30 min · horizonte +3 min</span>
+                    <span id="ai-buffer-temp" class="ai-buffer-chip"></span>
+                </div>
+                <div id="ai-cards-temp" class="ai-cards-grid"></div>
+                <div class="ai-chart-card">
+                    <div class="ai-chart-head">
+                        <div>
+                            <div class="ai-chart-eyebrow">señal</div>
+                            <div class="ai-chart-title">real <span class="muted">vs</span> predicho +3min</div>
+                        </div>
+                        <div class="ai-chart-unit">°C</div>
+                    </div>
+                    <div id="ai-chart-temp" class="ai-chart"></div>
+                </div>
+            </section>
+
+            <section class="ai-section" id="ai-group-hum">
+                <div class="ai-section-head">
+                    <h2>Humedad</h2>
+                    <span class="ai-section-sub">6 sensores · ventana 30 min · horizonte +3 min</span>
+                    <span id="ai-buffer-hum" class="ai-buffer-chip"></span>
+                </div>
+                <div id="ai-cards-hum" class="ai-cards-grid"></div>
+                <div class="ai-chart-card">
+                    <div class="ai-chart-head">
+                        <div>
+                            <div class="ai-chart-eyebrow">señal</div>
+                            <div class="ai-chart-title">real <span class="muted">vs</span> predicho +3min</div>
+                        </div>
+                        <div class="ai-chart-unit">%</div>
+                    </div>
+                    <div id="ai-chart-hum" class="ai-chart"></div>
+                </div>
+            </section>
+        </main>
+
+        <footer class="ai-footer">
+            <span class="ai-footer-dot"></span>
+            <span>Modelo dual GRU · entrenado con predicción diferencial</span>
+            <span class="ai-footer-version">v0.1</span>
+        </footer>
+    </div>
+
     <div class="footer">TENEBRIOS &mdash; Real-time IoT 3D Volumetric Temperature Monitor</div>
 
     <!-- Franja dorada: indica que el tablero se abre al acercar el mouse al borde derecho -->
     <div class="panel-edge-hint" title="Tablero →"></div>
+
+    <!-- ECharts para vista IA (sparklines + charts overlay real vs predicho) -->
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
 
     <!-- Logica del cliente (modulos ES) -->
     <script type="module" src="/js/app.js"></script>

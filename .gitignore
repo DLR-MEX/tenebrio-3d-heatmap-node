@@ -55,3 +55,24 @@ Thumbs.db
 .nvmrc
 .nvm
 .node-version
+
+# ===== ai-predictor (Python sidecar) =====
+# Virtualenvs
+.venv/
+venv/
+ENV/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Notebooks: solo ignoramos checkpoints, los .ipynb se commitean
