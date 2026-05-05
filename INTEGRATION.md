@@ -110,6 +110,33 @@ tenebrio-3d-heatmap-node/
 
 Cero dependencias nuevas en `package.json`: el proxy usa `fetch` nativo de Node 20+.
 
+## Detección de anomalías (umbrales)
+
+El backend clasifica cada sensor contra rangos operativos óptimos:
+
+| Grupo | Rango óptimo | Fuera = |
+|---|---|---|
+| Temperatura (`t1..t5`, `tex`) | 15–30 °C | `abnormal` |
+| Humedad (`h1..h5`, `hex`) | 60–90 % | `abnormal` |
+
+Los umbrales están como constantes en `ai-predictor/app/service.py` (`TEMP_OPTIMAL_MIN/MAX`, `HUM_OPTIMAL_MIN/MAX`). Para cambiarlos basta editar el archivo y reiniciar.
+
+Cada evento `prediction` del SSE (y el snapshot inicial) incluye:
+
+```json
+"alerts": {
+  "t1": { "current": "ok",       "predicted": "abnormal" },
+  "t2": { "current": "abnormal", "predicted": "abnormal" }
+}
+```
+
+**Visual en la vista IA:**
+- Card con borde rojo → valor actual fuera de rango
+- Card con borde naranja + ⚠ → valor actual ok pero predicho fuera de rango (alerta anticipada)
+- Valor predicho en rojo cuando aplica
+
+Esta misma información llega a cualquier consumidor del SSE — si en el futuro se conecta el agente LangGraph mencionado en el README, ya tiene la señal estructurada lista para tomar decisiones.
+
 ## Seguridad
 
 - ✅ Sidecar Python solo escucha en `127.0.0.1:8000`

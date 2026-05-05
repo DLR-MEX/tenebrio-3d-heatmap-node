@@ -31,7 +31,7 @@ export function buildCards(group, vars, hues) {
     });
 }
 
-export function updateCard(group, vars, idx, current, predicted, history, unit) {
+export function updateCard(group, vars, idx, current, predicted, alerts, history, unit) {
     const v = vars[idx];
     const card = document.querySelector(`#ai-cards-${group.toLowerCase()} [data-var="${v}"]`);
     if (!card) return;
@@ -39,6 +39,7 @@ export function updateCard(group, vars, idx, current, predicted, history, unit) 
     const cur = current[v];
     const pred = predicted[v];
     const delta = pred - cur;
+    const a = alerts?.[v] || { current: 'unknown', predicted: 'unknown' };
 
     card.querySelector('[data-role="value"]').textContent = `${fmt(cur)}${unit}`;
     card.querySelector('[data-role="pred"]').textContent = `${fmt(pred)}${unit}`;
@@ -49,6 +50,12 @@ export function updateCard(group, vars, idx, current, predicted, history, unit) 
     if (delta > 0.01) deltaEl.classList.add('up');
     else if (delta < -0.01) deltaEl.classList.add('down');
     else deltaEl.classList.add('flat');
+
+    // Estado: marca card y valor segun la clasificacion del backend.
+    // - data-cur-state: estado actual (red border si abnormal hoy)
+    // - data-pred-state: estado +3min (red en valor predicho si va a ser abnormal)
+    card.dataset.curState = a.current;
+    card.dataset.predState = a.predicted;
 
     // Animacion sutil al actualizar (Danny usa dorado, mantengo coherencia)
     card.dataset.flash = '1';

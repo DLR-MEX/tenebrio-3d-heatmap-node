@@ -613,6 +613,33 @@ body.immersive #scene-container {
     100% { background-color: transparent; }
 }
 
+/* Estado del sensor (clasificacion contra umbrales operativos del backend).
+   - cur-state: si el valor ACTUAL ya esta fuera de rango -> borde rojo.
+   - pred-state: si el valor PREDICHO +3min va a salirse -> valor predicho
+     en rojo + icono de alerta (warning anticipado).
+   "ok" no aplica estilo (estado sano). */
+.ai-sensor[data-cur-state="abnormal"] {
+    border-color: #ef4444;
+    box-shadow: inset 0 0 0 1px rgba(239,68,68,0.25);
+}
+.ai-sensor[data-cur-state="abnormal"]::before { background: #ef4444 !important; opacity: 1; }
+.ai-sensor[data-cur-state="abnormal"] .ai-sensor-value { color: #fca5a5; }
+
+.ai-sensor[data-pred-state="abnormal"] .ai-sensor-pred {
+    color: #fca5a5;
+    font-weight: 600;
+}
+.ai-sensor[data-pred-state="abnormal"] .ai-sensor-pred::after {
+    content: '⚠';
+    margin-left: 6px;
+    color: #fbbf24;
+}
+/* Caso especifico: ahora ok, predicho abnormal -> warning naranja en card */
+.ai-sensor[data-cur-state="ok"][data-pred-state="abnormal"] {
+    border-color: #f59e0b;
+    box-shadow: inset 0 0 0 1px rgba(245,158,11,0.20);
+}
+
 .ai-chart-card {
     padding: 18px;
     border-radius: 10px;

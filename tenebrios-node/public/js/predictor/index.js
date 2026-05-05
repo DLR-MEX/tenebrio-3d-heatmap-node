@@ -81,7 +81,7 @@ function applySnapshot(snap) {
         const unit = group === 'TEMP' ? '°' : '%';
         if (g.ts && g.current && Object.keys(g.current).length) {
             for (let i = 0; i < vars.length; i++) {
-                updateCard(group, vars, i, g.current, g.predicted, state[group].history, unit);
+                updateCard(group, vars, i, g.current, g.predicted, g.alerts || {}, state[group].history, unit);
             }
         }
         refreshMainChart(group, vars, state[group].history);
@@ -107,11 +107,12 @@ function applyUpdate(payload) {
             ts: payload.ts,
             current: payload.current,
             predicted: payload.predicted,
+            alerts: payload.alerts || {},
         });
         if (state[group].history.length > MAX_POINTS) state[group].history.shift();
 
         for (let i = 0; i < vars.length; i++) {
-            updateCard(group, vars, i, payload.current, payload.predicted, state[group].history, unit);
+            updateCard(group, vars, i, payload.current, payload.predicted, payload.alerts || {}, state[group].history, unit);
         }
         refreshMainChart(group, vars, state[group].history);
         setBufferChip(group, BUFFER_TARGET, BUFFER_TARGET);

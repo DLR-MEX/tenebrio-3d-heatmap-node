@@ -36,6 +36,38 @@ LOOK_BACK = 30
 STEP_AHEAD = 3
 HISTORY_MAX = 240  # ~ ultimas 240 predicciones por grupo en memoria
 
+# Umbrales operativos (rango optimo por sensor). Fuera de este rango el
+# valor se clasifica como "abnormal". El modelo GRU emite floats puros;
+# la clasificacion vive aqui para que cualquier consumidor (dashboard,
+# LangGraph, MQTT republish) reciba la misma senal.
+TEMP_OPTIMAL_MIN = 15.0
+TEMP_OPTIMAL_MAX = 30.0
+HUM_OPTIMAL_MIN = 60.0
+HUM_OPTIMAL_MAX = 90.0
+
+
+def classify(value: float | None, group: str) -> str:
+    """Devuelve 'ok' | 'abnormal' | 'unknown' segun el rango operativo."""
+    if value is None or not isinstance(value, (int, float)):
+        return "unknown"
+    if group == "TEMP":
+        lo, hi = TEMP_OPTIMAL_MIN, TEMP_OPTIMAL_MAX
+    else:  # HUM (cualquier otro grupo cae aqui por simetria)
+        lo, hi = HUM_OPTIMAL_MIN, HUM_OPTIMAL_MAX
+    return "ok" if lo <= value <= hi else "abnormal"
+
+
+def build_alerts(current: dict, predicted: dict, var_names: list[str], group: str) -> dict:
+    """Construye {var: {current, predicted}} aplicando classify() a cada lado."""
+    out = {}
+    for var in var_names:
+        out[var] = {
+            "current": classify(current.get(var), group),
+            "predicted": classify(predicted.get(var), group),
+        }
+    return out
+
+
 log = logging.getLogger(__name__)
 
 
@@ -210,8 +242,8 @@ class PredictionService:
         # estado compartido
         self._state_lock = threading.Lock()
         self.latest: dict[str, dict] = {
-            "TEMP": {"current": {}, "predicted": {}, "ts": None},
-            "HUM": {"current": {}, "predicted": {}, "ts": None},
+            "TEMP": {"current": {}, "predicted": {}, "alerts": {}, "ts": None},
+            "HUM": {"current": {}, "predicted": {}, "alerts": {}, "ts": None},
         }
         self.history: dict[str, deque[dict]] = {
             "TEMP": deque(maxlen=HISTORY_MAX),
@@ -268,6 +300,7 @@ class PredictionService:
                         "vars": TEMP_VARS,
                         "current": dict(self.latest["TEMP"]["current"]),
                         "predicted": dict(self.latest["TEMP"]["predicted"]),
+                        "alerts": dict(self.latest["TEMP"]["alerts"]),
                         "ts": self.latest["TEMP"]["ts"],
                         "buffer_size": len(self.temp_predictor.window),
                         "history": list(self.history["TEMP"]),
@@ -276,10 +309,15 @@ class PredictionService:
                         "vars": HUM_VARS,
                         "current": dict(self.latest["HUM"]["current"]),
                         "predicted": dict(self.latest["HUM"]["predicted"]),
+                        "alerts": dict(self.latest["HUM"]["alerts"]),
                         "ts": self.latest["HUM"]["ts"],
                         "buffer_size": len(self.hum_predictor.window),
                         "history": list(self.history["HUM"]),
                     },
+                },
+                "thresholds": {
+                    "TEMP": {"min": TEMP_OPTIMAL_MIN, "max": TEMP_OPTIMAL_MAX},
+                    "HUM":  {"min": HUM_OPTIMAL_MIN,  "max": HUM_OPTIMAL_MAX},
                 },
             }
 
@@ -399,17 +437,20 @@ class PredictionService:
             return
 
         ts = time.time()
+        alerts = build_alerts(result["current"], result["predicted"], predictor.var_names, group)
         with self._state_lock:
             self.latest[group]["current"] = result["current"]
             self.latest[group]["predicted"] = result["predicted"]
+            self.latest[group]["alerts"] = alerts
             self.latest[group]["ts"] = ts
             self.history[group].append({
                 "ts": ts,
                 "current": result["current"],
                 "predicted": result["predicted"],
+                "alerts": alerts,
             })
 
-        self._log_prediction(predictor, result, group)
+        self._log_prediction(predictor, result, group, alerts)
         if self.cfg.publish_predictions:
             self._publish_prediction(predictor, result)
         self._broadcast({
@@ -419,15 +460,19 @@ class PredictionService:
             "vars": predictor.var_names,
             "current": result["current"],
             "predicted": result["predicted"],
+            "alerts": alerts,
         })
 
-    def _log_prediction(self, predictor: Predictor, result: dict, group: str) -> None:
+    def _log_prediction(self, predictor: Predictor, result: dict, group: str, alerts: dict) -> None:
         lines = [f"[{group}] Prediccion +{STEP_AHEAD} min:"]
-        lines.append(f"  {'Sensor':<6} {'Actual':>10} {'Predicho':>10} {'Delta':>10}")
+        lines.append(f"  {'Sensor':<6} {'Actual':>10} {'Predicho':>10} {'Delta':>10} {'Estado':>20}")
         for var in predictor.var_names:
             cur = result["current"][var]
             pred = result["predicted"][var]
-            lines.append(f"  {var:<6} {cur:>10.3f} {pred:>10.3f} {pred-cur:>+10.3f}")
+            cur_state = alerts[var]["current"]
+            pred_state = alerts[var]["predicted"]
+            badge = f"{cur_state}->{pred_state}"
+            lines.append(f"  {var:<6} {cur:>10.3f} {pred:>10.3f} {pred-cur:>+10.3f} {badge:>20}")
         self.log.info("\n".join(lines))
 
     def _publish_prediction(self, predictor: Predictor, result: dict) -> None:
