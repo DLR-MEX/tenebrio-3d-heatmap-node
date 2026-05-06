@@ -68,7 +68,154 @@ def build_alerts(current: dict, predicted: dict, var_names: list[str], group: st
     return out
 
 
+# Etiquetas legibles para los grupos en mensajes Telegram
+GROUP_LABELS = {"TEMP": "Temperatura", "HUM": "Humedad"}
+GROUP_UNITS = {"TEMP": "°C", "HUM": "%"}
+
+
 log = logging.getLogger(__name__)
+
+
+# ---------- Telegram ----------
+
+class TelegramNotifier:
+    """
+    Manda alertas a un chat de Telegram cuando un sensor cambia de estado.
+
+    Diseño:
+      - Solo dispara en TRANSICIONES de estado (ok->abnormal o abnormal->ok),
+        nunca en cada prediccion. Esto evita spam.
+      - Cooldown por sensor: si el valor oscila en la frontera del umbral,
+        no manda mensajes hasta que pase `cooldown_sec`.
+      - Send no-bloqueante: dispara un thread daemon por mensaje (volumen
+        bajo, simple). Si Telegram esta caido, solo se pierde el mensaje.
+      - Si esta deshabilitado o sin token, on_alerts() es no-op.
+    """
+
+    TELEGRAM_API = "https://api.telegram.org"
+
+    def __init__(self, bot_token: str, chat_id: str, enabled: bool, cooldown_sec: float = 300.0):
+        self.bot_token = bot_token
+        self.chat_id = chat_id
+        self.enabled = bool(enabled and bot_token and chat_id)
+        self.cooldown_sec = cooldown_sec
+        self._prev_cur: dict[str, str] = {}   # var -> ultimo estado "current"
+        self._prev_pred: dict[str, str] = {}  # var -> ultimo estado "predicted"
+        self._last_sent: dict[tuple[str, str], float] = {}  # (var, kind) -> ts
+        self._lock = threading.Lock()
+        self.log = logging.getLogger("telegram")
+        if self.enabled:
+            self.log.info("Telegram notifier ACTIVO (cooldown=%.0fs)", cooldown_sec)
+        else:
+            self.log.info("Telegram notifier deshabilitado (TELEGRAM_ENABLED=false o credenciales vacias)")
+
+    def on_alerts(
+        self,
+        group: str,
+        var_names: list[str],
+        current_values: dict,
+        predicted_values: dict,
+        alerts: dict,
+    ) -> None:
+        if not self.enabled:
+            return
+        now = time.time()
+        unit = GROUP_UNITS.get(group, "")
+        group_label = GROUP_LABELS.get(group, group)
+
+        if group == "TEMP":
+            lo, hi = TEMP_OPTIMAL_MIN, TEMP_OPTIMAL_MAX
+        else:
+            lo, hi = HUM_OPTIMAL_MIN, HUM_OPTIMAL_MAX
+
+        with self._lock:
+            for var in var_names:
+                cur_state = alerts[var]["current"]
+                pred_state = alerts[var]["predicted"]
+                cur_val = current_values.get(var)
+                pred_val = predicted_values.get(var)
+
+                prev_cur = self._prev_cur.get(var)
+                prev_pred = self._prev_pred.get(var)
+                self._prev_cur[var] = cur_state
+                self._prev_pred[var] = pred_state
+
+                # 1) PELIGRO inmediato: actual paso a abnormal
+                if cur_state == "abnormal" and prev_cur != "abnormal":
+                    if self._cooldown_ok(var, "current", now):
+                        self._send_async(self._fmt_danger(group_label, var, cur_val, lo, hi, unit))
+                        self._last_sent[(var, "current")] = now
+
+                # 2) Recuperacion: actual paso de abnormal a ok
+                elif cur_state == "ok" and prev_cur == "abnormal":
+                    if self._cooldown_ok(var, "current", now):
+                        self._send_async(self._fmt_recovered(group_label, var, cur_val, unit))
+                        self._last_sent[(var, "current")] = now
+
+                # 3) Alerta anticipada: predicho cambio a abnormal (y actual sigue ok)
+                if cur_state == "ok" and pred_state == "abnormal" and prev_pred != "abnormal":
+                    if self._cooldown_ok(var, "predicted", now):
+                        self._send_async(self._fmt_warn(group_label, var, cur_val, pred_val, lo, hi, unit))
+                        self._last_sent[(var, "predicted")] = now
+
+    def _cooldown_ok(self, var: str, kind: str, now: float) -> bool:
+        last = self._last_sent.get((var, kind))
+        return last is None or (now - last) >= self.cooldown_sec
+
+    @staticmethod
+    def _fmt_danger(group_label: str, var: str, value, lo: float, hi: float, unit: str) -> str:
+        v = f"{value:.2f}{unit}" if isinstance(value, (int, float)) else "?"
+        return (
+            f"\U0001F6A8 *PELIGRO* — {group_label} anormal\n"
+            f"Sensor *{var}* fuera de rango: `{v}`\n"
+            f"Rango optimo: {lo:g}–{hi:g} {unit}"
+        )
+
+    @staticmethod
+    def _fmt_warn(group_label: str, var: str, cur, pred, lo: float, hi: float, unit: str) -> str:
+        c = f"{cur:.2f}{unit}" if isinstance(cur, (int, float)) else "?"
+        p = f"{pred:.2f}{unit}" if isinstance(pred, (int, float)) else "?"
+        return (
+            f"⚠️ *Alerta predictiva* — {group_label}\n"
+            f"Sensor *{var}* podria salirse en +3min:\n"
+            f"actual `{c}` -> predicho `{p}`\n"
+            f"Rango optimo: {lo:g}–{hi:g} {unit}"
+        )
+
+    @staticmethod
+    def _fmt_recovered(group_label: str, var: str, value, unit: str) -> str:
+        v = f"{value:.2f}{unit}" if isinstance(value, (int, float)) else "?"
+        return (
+            f"✅ {group_label} normalizado\n"
+            f"Sensor *{var}* regreso al rango: `{v}`"
+        )
+
+    def _send_async(self, text: str) -> None:
+        # Daemon thread: no bloquea el procesamiento MQTT y al apagar el
+        # servicio no impide la salida del proceso.
+        threading.Thread(target=self._send, args=(text,), daemon=True).start()
+
+    def _send(self, text: str) -> None:
+        url = f"{self.TELEGRAM_API}/bot{self.bot_token}/sendMessage"
+        body = json.dumps({
+            "chat_id": self.chat_id,
+            "text": text,
+            "parse_mode": "Markdown",
+            "disable_web_page_preview": True,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            url, data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5) as r:
+                if getattr(r, "status", 200) >= 300:
+                    self.log.warning("Telegram respondio status=%s", r.status)
+        except urllib.error.HTTPError as e:
+            self.log.warning("Telegram HTTP %s: %s", e.code, e.reason)
+        except Exception as e:  # red, timeout, etc.
+            self.log.warning("Telegram envio fallo: %s", e)
 
 
 # ---------- Config ----------
@@ -86,6 +233,10 @@ class Config:
     bucket_timeout_sec: float
     app_host: str
     app_port: int
+    telegram_enabled: bool
+    telegram_bot_token: str
+    telegram_chat_id: str
+    telegram_cooldown_sec: float
 
     @classmethod
     def load(cls) -> "Config":
@@ -108,6 +259,10 @@ class Config:
             bucket_timeout_sec=float(os.getenv("BUCKET_TIMEOUT_SEC", "45")),
             app_host=os.getenv("APP_HOST", "0.0.0.0"),
             app_port=int(os.getenv("APP_PORT", "8000")),
+            telegram_enabled=os.getenv("TELEGRAM_ENABLED", "false").lower() == "true",
+            telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
+            telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip(),
+            telegram_cooldown_sec=float(os.getenv("TELEGRAM_COOLDOWN_SEC", "300")),
         )
 
 
@@ -238,6 +393,13 @@ class PredictionService:
         )
         self.temp_bucket = SampleBucket(TEMP_VARS, cfg.bucket_timeout_sec)
         self.hum_bucket = SampleBucket(HUM_VARS, cfg.bucket_timeout_sec)
+
+        self.telegram = TelegramNotifier(
+            bot_token=cfg.telegram_bot_token,
+            chat_id=cfg.telegram_chat_id,
+            enabled=cfg.telegram_enabled,
+            cooldown_sec=cfg.telegram_cooldown_sec,
+        )
 
         # estado compartido
         self._state_lock = threading.Lock()
@@ -453,6 +615,18 @@ class PredictionService:
         self._log_prediction(predictor, result, group, alerts)
         if self.cfg.publish_predictions:
             self._publish_prediction(predictor, result)
+        # Notificar a Telegram (solo en transiciones, con cooldown).
+        # Si el notifier esta deshabilitado, esto es un no-op.
+        try:
+            self.telegram.on_alerts(
+                group=group,
+                var_names=predictor.var_names,
+                current_values=result["current"],
+                predicted_values=result["predicted"],
+                alerts=alerts,
+            )
+        except Exception as e:
+            self.log.warning("Telegram notifier fallo: %s", e)
         self._broadcast({
             "type": "prediction",
             "group": group,

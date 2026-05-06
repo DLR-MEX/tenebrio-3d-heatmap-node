@@ -134,8 +134,50 @@ Cada evento `prediction` del SSE (y el snapshot inicial) incluye:
 - Card con borde rojo → valor actual fuera de rango
 - Card con borde naranja + ⚠ → valor actual ok pero predicho fuera de rango (alerta anticipada)
 - Valor predicho en rojo cuando aplica
+- **Pill de texto** debajo del valor predicho:
+  - 🟢 `Normal` (verde)
+  - 🟠 `Alerta +3min` (naranja, predicción saldrá del rango)
+  - 🔴 `PELIGRO` (rojo, valor actual ya fuera de rango — con latido)
+  - ⚪ `—` (sin clasificar, antes del primer dato)
 
 Esta misma información llega a cualquier consumidor del SSE — si en el futuro se conecta el agente LangGraph mencionado en el README, ya tiene la señal estructurada lista para tomar decisiones.
+
+## Alertas Telegram
+
+El sidecar Python puede enviar alertas a un chat de Telegram cuando un sensor cambia de estado. Solo dispara en **transiciones** (ok→abnormal, abnormal→ok) y respeta un **cooldown** por sensor (default 5 min) para no spamear.
+
+### Setup (una vez)
+
+1. En Telegram, busca **@BotFather** → `/newbot` → te da un token tipo `1234567890:AAH...`.
+2. Manda cualquier mensaje al bot creado (Telegram requiere primer contacto del usuario).
+3. Para obtener tu `chat_id`:
+   - **Chat privado:** busca **@userinfobot** y mira el campo `Id`.
+   - **Grupo:** agrega **@RawDataBot** al grupo y mira `"chat":{"id": ...}` (suele ser negativo).
+4. Edita `ai-predictor/.env`:
+   ```
+   TELEGRAM_ENABLED=true
+   TELEGRAM_BOT_TOKEN=1234567890:AAH...
+   TELEGRAM_CHAT_ID=123456789
+   TELEGRAM_COOLDOWN_SEC=300
+   ```
+5. Reinicia el sidecar. En el log inicial debe aparecer:
+   ```
+   [INFO] telegram :: Telegram notifier ACTIVO (cooldown=300s)
+   ```
+
+### Tipos de mensaje
+
+| Disparo | Mensaje (ejemplo) |
+|---|---|
+| `ok` → `abnormal` (actual) | 🚨 **PELIGRO** — Temperatura anormal · Sensor `t1` fuera de rango: `32.5°C` · Rango: 15–30 °C |
+| `ok` y predicho `abnormal` (anticipado) | ⚠ **Alerta predictiva** — Sensor `t1` podría salirse en +3min: `28.5°C` → `30.8°C` |
+| `abnormal` → `ok` (recuperación) | ✅ Temperatura normalizada · Sensor `t1` regresó al rango: `28.0°C` |
+
+### Notas
+
+- Si `TELEGRAM_ENABLED=false` o falta token/chat_id, el notifier es no-op (no crashea, no manda nada)
+- El send va en thread daemon → no bloquea el procesamiento MQTT
+- Si Telegram está caído o tarda, ese mensaje se pierde (timeout 5s) — el siguiente intento será en la siguiente transición
 
 ## Seguridad
 
