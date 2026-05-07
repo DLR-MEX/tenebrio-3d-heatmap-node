@@ -683,6 +683,36 @@ body.immersive #scene-container {
     50%      { box-shadow: 0 0 0 6px rgba(239,68,68,0.0); background: rgba(239,68,68,0.24); }
 }
 
+/* ==================================================================
+   Skeletons (shimmer) — placeholder mientras llega el primer dato.
+   Se aplican a value/pred/delta/status hasta que updateCard quita las
+   clases. El propio elemento mantiene su tamaño para que no haya
+   "jump" cuando llega el numero real.
+   ================================================================== */
+.skeleton {
+    display: inline-block;
+    background: linear-gradient(90deg,
+        rgba(255,255,255,0.04) 0%,
+        rgba(232,184,48,0.10) 50%,
+        rgba(255,255,255,0.04) 100%);
+    background-size: 200% 100%;
+    animation: ai-shimmer 1.4s ease-in-out infinite;
+    border-radius: 6px;
+    color: transparent !important;
+    border-color: rgba(255,255,255,0.04) !important;
+    user-select: none;
+}
+.skeleton-value  { min-width: 70px; height: 1.55rem; border-radius: 8px; }
+.skeleton-pred   { min-width: 38px; height: 0.7rem;  border-radius: 4px; }
+.skeleton-pill   { min-width: 52px; height: 0.85rem; border-radius: 999px; }
+
+/* Mientras la card esta en loading, atenuamos sutilmente el ribbon */
+.ai-sensor.loading::before { opacity: 0.25; }
+@keyframes ai-shimmer {
+    0%   { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
 .ai-chart-card {
     padding: 18px;
     border-radius: 10px;

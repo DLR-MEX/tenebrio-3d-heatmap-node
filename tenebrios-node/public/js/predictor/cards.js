@@ -13,19 +13,21 @@ export function buildCards(group, vars, hues) {
     root.innerHTML = '';
     vars.forEach((v, i) => {
         const card = document.createElement('div');
-        card.className = 'ai-sensor';
+        // Arranca en estado "loading" — los placeholders muestran shimmer
+        // hasta que llegue el primer SSE/snapshot con datos para este sensor.
+        card.className = 'ai-sensor loading';
         card.style.setProperty('--hue', hues[i]);
         card.dataset.var = v;
         card.innerHTML = `
             <div class="ai-sensor-row">
                 <span class="ai-sensor-label">${v}</span>
-                <span class="ai-sensor-delta flat" data-role="delta">—</span>
+                <span class="ai-sensor-delta flat skeleton skeleton-pill" data-role="delta">&nbsp;</span>
             </div>
-            <div class="ai-sensor-value" data-role="value">—</div>
+            <div class="ai-sensor-value skeleton skeleton-value" data-role="value">&nbsp;</div>
             <div class="ai-sensor-pred">
-                <span class="arrow">→</span><span data-role="pred">—</span><span class="pred-suffix">+3min</span>
+                <span class="arrow">→</span><span class="skeleton skeleton-pred" data-role="pred">&nbsp;</span><span class="pred-suffix">+3min</span>
             </div>
-            <div class="ai-sensor-status unknown" data-role="status">—</div>
+            <div class="ai-sensor-status unknown skeleton skeleton-pill" data-role="status">&nbsp;</div>
             <div class="ai-sensor-spark" data-role="spark"></div>
         `;
         root.appendChild(card);
@@ -41,6 +43,14 @@ export function updateCard(group, vars, idx, current, predicted, alerts, history
     const pred = predicted[v];
     const delta = pred - cur;
     const a = alerts?.[v] || { current: 'unknown', predicted: 'unknown' };
+
+    // Una vez llega data, removemos los skeletons (idempotente).
+    if (card.classList.contains('loading')) {
+        card.classList.remove('loading');
+        card.querySelectorAll('.skeleton').forEach((el) => {
+            el.classList.remove('skeleton', 'skeleton-pill', 'skeleton-value', 'skeleton-pred');
+        });
+    }
 
     card.querySelector('[data-role="value"]').textContent = `${fmt(cur)}${unit}`;
     card.querySelector('[data-role="pred"]').textContent = `${fmt(pred)}${unit}`;
