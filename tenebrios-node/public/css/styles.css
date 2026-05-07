@@ -838,6 +838,40 @@ body.immersive #scene-container {
    por la regla compartida arriba (.ai-cfg-trigger, .ai-sound-toggle). */
 .ai-theme-toggle { /* hereda dimensiones de la regla compartida */ }
 
+/* Cheat sheet de atajos (modal). Reusa estilos del modal Telegram. */
+.ai-shortcuts-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.65rem;
+    margin-top: 4px;
+}
+.ai-shortcuts-table td {
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--ai-border);
+    color: var(--ai-text);
+}
+.ai-shortcuts-table tr:last-child td { border-bottom: none; }
+.ai-shortcuts-table td:first-child { width: 60px; text-align: center; }
+.ai-shortcuts-table kbd {
+    background: var(--ai-bg-base);
+    border: 1px solid var(--ai-border);
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: var(--ai-accent);
+    box-shadow: 0 1px 0 rgba(0,0,0,0.2);
+}
+
+/* Modo demo: oculta el header global (logos CONDOR/TECHNEBROS) para
+   presentaciones / capturas limpias. Se activa con la tecla D. */
+body.demo-mode .header { display: none !important; }
+body.demo-mode .footer { display: none !important; }
+body.demo-mode .dashboard,
+body.demo-mode .ai-dashboard { height: 100vh !important; }
+
 /* ==================================================================
    Light mode (SOLO vista IA). Sobreescribe las CSS vars dentro del
    contenedor .ai-dashboard cuando data-theme="light". La vista 3D de
