@@ -41,6 +41,47 @@ if TYPE_CHECKING:
 log = logging.getLogger("agent")
 
 
+# Catalogo de variables de infraestructura (sala de maquinas + piso radiante
+# + ventilacion + calidad de aire). Estas NO entran al modelo predictivo del
+# cuarto — son solo INFORMATIVAS y se consultan a Ubidots on-demand. Los
+# nombres y unidades vienen del dashboard 3D de Danny.
+#
+# Estructura: ubidots_label -> (display_name, unit, category, hint)
+INFRASTRUCTURE_VARS = {
+    # ----- Calefaccion: solar -> termo -> bomba -> piso radiante -----
+    "temperatura2":  ("Calentador solar",      "°C", "calefaccion",
+                      "Panel solar que calienta agua para el termo."),
+    "temperatura5":  ("Termo",                  "°C", "calefaccion",
+                      "Tanque acumulador de agua caliente."),
+    "m2":            ("Bomba M2",               "",   "calefaccion",
+                      "Bomba sumergible que circula agua del termo al piso."),
+    "temperatura4":  ("Entrada al cuarto",     "°C", "calefaccion",
+                      "Tuberia entrando al circuito de piso radiante."),
+    "temperatura3":  ("Medio del piso radiante","°C", "calefaccion",
+                      "Punto intermedio del circuito en el piso."),
+    "temperatura1":  ("Salida del piso radiante","°C","calefaccion",
+                      "Tuberia saliendo del piso (despues de calentar el cuarto)."),
+    "v1":            ("Valvula V1",             "",   "calefaccion",
+                      "Valvula de control de flujo (estado on/off)."),
+    "v2":            ("Valvula V2",             "",   "calefaccion",
+                      "Valvula de control de flujo (estado on/off)."),
+
+    # ----- Ventilacion -----
+    "ventilador":    ("Ventilador",             "",   "ventilacion",
+                      "Recirculacion de aire interno."),
+    "extractor":     ("Extractor",              "",   "ventilacion",
+                      "Extraccion de aire viciado."),
+
+    # ----- Calidad de aire -----
+    "amoniaco":      ("Amoniaco (NH3)",         "ppm","calidad_aire",
+                      "Niveles de amoniaco — debe mantenerse bajo (<25 ppm)."),
+
+    # ----- Humedad agregada -----
+    "hum_general":   ("Humedad general",        "%",  "ambiente",
+                      "Humedad agregada del cuarto (distinto de h1-h5)."),
+}
+
+
 SYSTEM_PROMPT = """Eres Tenebris AI Sentinel, un asistente experto en el monitoreo \
 de un cuarto de cría de tenebrios (escarabajos) que usa machine learning para \
 predecir microclima.
@@ -56,6 +97,21 @@ ARQUITECTURA DEL CUARTO:
   * tpi = temperatura promedio INFERIOR (parte baja del cuarto). Idem.
   Cuando el usuario pregunte por "promedio superior", "promedio inferior",
   "tps", "tpi" o "estratificación térmica", lee estos campos de extras.
+
+INFRAESTRUCTURA EXTERNA AL CUARTO (consultable via get_infrastructure_state):
+El sistema tiene una sala de máquinas y un piso radiante que calientan el cuarto.
+Cuando el usuario pregunte por estos componentes (no entran al modelo predictivo
+de t1-t5; se consultan a Ubidots a demanda):
+  * Calefacción: el flujo es Calentador solar (temperatura2) → Termo
+    (temperatura5, tanque acumulador) → Bomba M2 (m2, sumergible) →
+    Entrada al cuarto (temperatura4) → Piso radiante (Medio temperatura3,
+    Salida temperatura1). Válvulas V1 y V2 controlan el flujo.
+  * Ventilación: ventilador (recirculación interna), extractor (extracción).
+  * Calidad de aire: amoniaco (NH3 ppm; debe mantenerse <25 ppm).
+  * Otros: hum_general (humedad agregada del cuarto, distinta de h1-h5).
+Si el usuario diagnostica problemas de temperatura (ej. "por qué está frío
+el cuarto?"), correlaciona con get_infrastructure_state — el termo o
+calentador podrían estar bajos.
 
 RANGOS ÓPTIMOS (aplican SOLO a sensores INTERIORES):
 - TEMP interior (t1–t5): 15–30 °C. Fuera = "anormal" → requiere atención.
@@ -243,6 +299,43 @@ def _tool_schemas() -> list[dict]:
                         },
                     },
                     "required": ["var"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_infrastructure_state",
+                "description": (
+                    "Devuelve las ULTIMAS lecturas de los sensores de infraestructura "
+                    "del sistema (sala de maquinas, piso radiante, ventilacion, calidad "
+                    "de aire). Estas variables NO entran al modelo predictivo del "
+                    "cuarto pero son consultables on-demand. Incluye:\n"
+                    "  Calefaccion: Calentador solar (temperatura2), Termo "
+                    "(temperatura5), Bomba M2 (m2), Entrada al cuarto (temperatura4), "
+                    "Medio del piso (temperatura3), Salida del piso (temperatura1), "
+                    "Valvulas V1/V2.\n"
+                    "  Ventilacion: ventilador, extractor.\n"
+                    "  Calidad de aire: amoniaco (NH3 ppm).\n"
+                    "  Otros: hum_general (humedad agregada).\n"
+                    "Usalo cuando el usuario pregunte por termo, calentador, bomba, "
+                    "piso radiante, valvulas, ventilador, extractor, amoniaco/NH3, "
+                    "o calidad de aire."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "category": {
+                            "type": "string",
+                            "enum": ["calefaccion", "ventilacion", "calidad_aire",
+                                     "ambiente", "all"],
+                            "description": (
+                                "Filtrar por categoria (opcional). 'all' o omitir "
+                                "devuelve todas."
+                            ),
+                        },
+                    },
+                    "required": [],
                 },
             },
         },
@@ -517,6 +610,8 @@ class AgentService:
             return self._tool_history(args, predicted=True)
         if name == "plot_history":
             return self._tool_plot(args)
+        if name == "get_infrastructure_state":
+            return self._tool_infrastructure(args)
         return {"error": f"tool desconocida: {name}"}
 
     def _tool_current_state(self) -> dict:
@@ -837,6 +932,73 @@ class AgentService:
                     "vuelve a llamar get_history_ubidots con un hours mayor (max 168 = 7 dias)."
                 )
         return out
+
+    def _tool_infrastructure(self, args: dict) -> dict:
+        """Pulla las ultimas lecturas de variables de infraestructura desde
+        Ubidots. Una sola llamada por variable usando get_last_values(n=1).
+        Cachea var_id en self._var_cache."""
+        category = args.get("category")
+        if category == "all":
+            category = None
+
+        from app.service import UbidotsHTTP
+        cfg = self.prediction_service.cfg
+        http = UbidotsHTTP(cfg.token)
+
+        # Asegurar que el cache de var_ids este lleno
+        if not self._var_cache:
+            device_id = http.get_device_id(cfg.device_label)
+            if device_id:
+                self._var_cache.update(http.get_variables(device_id))
+
+        sensors_by_category: dict[str, list] = {}
+        for label, (display, unit, cat, hint) in INFRASTRUCTURE_VARS.items():
+            if category and cat != category:
+                continue
+            var_id = self._var_cache.get(label)
+            if not var_id:
+                # Intentamos resolver una vez mas (por si Ubidots tiene la var)
+                var_id = self._resolve_var_id(label)
+            if not var_id:
+                continue
+            try:
+                rows = http.get_last_values(var_id, 1)
+                value = rows[-1][1] if rows else None
+                ts_iso = (
+                    time.strftime("%Y-%m-%d %H:%M:%S",
+                                  time.localtime(rows[-1][0] / 1000))
+                    if rows else None
+                )
+            except Exception as e:
+                log.warning("get_last_values fallo para %s: %s", label, e)
+                value = None
+                ts_iso = None
+            sensors_by_category.setdefault(cat, []).append({
+                "label": label,
+                "name": display,
+                "value": round(value, 2) if isinstance(value, (int, float)) else None,
+                "unit": unit,
+                "ts_iso": ts_iso,
+                "description": hint,
+            })
+
+        # Si pidieron una categoria especifica pero no se encontro nada
+        if category and not sensors_by_category:
+            return {
+                "error": f"categoria '{category}' no devolvio datos. "
+                f"Categorias validas: calefaccion, ventilacion, calidad_aire, ambiente.",
+            }
+
+        return {
+            "categories": sensors_by_category,
+            "queried_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+            "_note": (
+                "Estos sensores son INFORMATIVOS — no entran al modelo predictivo "
+                "del cuarto y no tienen umbrales automaticos. Si el usuario pide "
+                "diagnostico (ej. 'por que esta frio el cuarto?'), correlaciona "
+                "la temperatura del termo/calentador con la temp interior."
+            ),
+        }
 
     # Paleta consistente con cards.js (TEMP_HUES + HUM_HUES)
     _PLOT_COLORS = [
