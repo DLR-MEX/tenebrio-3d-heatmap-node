@@ -200,6 +200,74 @@ Los cambios se aplican al instante (hot-reload) y se persisten en `ai-predictor/
 | POST | `/api/predictor/telegram` | Acepta `{chat_id?, enabled?, cooldown_sec?}`. Persiste a `runtime_config.json` |
 | POST | `/api/predictor/telegram/test` | Manda un mensaje de prueba al chat configurado |
 
+## Agente IA conversacional
+
+A partir de la fase 1 del feature `agent-ia-conversacional` el sidecar incluye un agente que responde preguntas en lenguaje natural sobre el cuarto. Es accesible desde dos canales:
+
+1. **Widget de chat en el dashboard** (icono 💬 abajo a la derecha de la vista IA, atajo `C`).
+2. **Bot de Telegram bidireccional** (mismo bot que ya manda alertas, ahora también responde mensajes).
+
+### Setup (5 minutos)
+
+1. Crear cuenta en **Ollama Cloud**: <https://ollama.com>. Ir a *Settings → Keys* y generar una API key (formato `XXXXXXXX.YYYYY...`).
+2. Pegarla en `ai-predictor/.env`:
+   ```
+   OLLAMA_API_KEY=tu-api-key
+   AGENT_ENABLED=true
+   OLLAMA_MODEL=gpt-oss:120b   # o granite4.1:8b para algo mas rapido/barato
+   ```
+3. Reiniciar el sidecar. En los logs verás `Agente IA ACTIVO (host=https://ollama.com, model=gpt-oss:120b)`.
+4. Para usar Telegram bidireccional: abrir el modal Telegram en el dashboard (engrane ⚙) y marcar **"Permitir consultas al bot (agente IA conversacional)"**. Default es OFF para evitar consumir tokens sin querer.
+
+### Tools que el agente puede usar
+
+El agente decide automáticamente cuándo invocar cada una según la pregunta:
+
+| Tool | Cuándo se invoca | Datos que devuelve |
+|---|---|---|
+| `get_current_state` | "¿cómo está la temperatura?", "¿hay sensores en alerta?" | snapshot actual + predicciones +3 min + flags ok/abnormal |
+| `get_thresholds` | "¿cuáles son los rangos óptimos?" | TEMP 15–30 °C, HUM 60–90 % |
+| `get_recent_alerts` | "¿hubo anomalías hoy?", "¿qué pasó con t1 ayer?" | transiciones de estado de las últimas N horas (de SQLite local) |
+| `get_history_ubidots` | "¿promedio de t3 en las últimas 6 horas?", "¿cuándo bajó la humedad?" | min/max/avg + ~30 puntos muestreados de Ubidots HTTP |
+| `get_predictions_history` | igual que el anterior pero para `*_pred` | precisión histórica del modelo |
+
+Las tools son **puras** (solo consulta, ningún side-effect). El agente no puede modificar configuración, mandar mensajes ni tocar Ubidots.
+
+### Comandos rápidos en Telegram
+
+Sin consumir tokens del LLM:
+
+- `/status` — bullet list con valores actuales y flags por sensor
+- `/alerts` — últimas 10 transiciones a estado abnormal en 24 h
+- `/help` — listado de comandos
+
+Cualquier otro mensaje (lenguaje natural) pasa al agente IA.
+
+### Persistencia
+
+- **SQLite** `ai-predictor/alert_log.sqlite` (gitignored): registra cada transición ok↔abnormal con timestamp, sensor, valor, predicción. Auto-cleanup a 30 días en cada arranque.
+- **Histórico real**: NO vive en el backend. El agente lo pulla desde Ubidots HTTP cuando se le pregunta. Tras el último merge, las predicciones también se publican (`t1_pred`, `h1_pred`, etc.) y son consultables.
+
+### Costos estimados (Ollama Cloud)
+
+- Modelo `gpt-oss:120b`: ~$0.001–0.005 por query (tarifa actual de Ollama Cloud, revisar en docs).
+- Conversación típica: 1000 input + 300 output tokens.
+- 100 queries/día ≈ $3–15/mes.
+
+Si los costos son altos, se puede cambiar a `granite4.1:8b` editando solo `OLLAMA_MODEL` en `.env` (más rápido y barato; soporta tool calling igual).
+
+### Defensa
+
+- El listener de Telegram **solo responde al `chat_id` configurado**. Mensajes de otros chat_ids se ignoran silenciosamente y se loguean.
+- El bot_token jamás se expone vía API. Solo vive en `ai-predictor/.env`.
+- El agente no tiene tools que modifiquen estado: si el LLM intenta inventar un comando, no hay efecto.
+
+### Endpoints REST
+
+- `POST /api/predictor/agent/chat` — `{message, history?}` → `{reply, tool_calls, model}`. Timeout 30 s en Express.
+- `GET /api/predictor/telegram` — devuelve `listener_enabled`, `listener_available`, etc.
+- `POST /api/predictor/telegram` — acepta `listener_enabled` además de los campos previos.
+
 ## Personalización (white-label)
 
 Los colores de marca están centralizados en `:root` al inicio de `tenebrios-node/public/css/styles.css`:

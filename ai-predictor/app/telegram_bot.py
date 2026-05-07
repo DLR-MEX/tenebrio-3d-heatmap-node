@@ -175,6 +175,12 @@ class TelegramListener:
             return
 
         log.info("Mensaje entrante: %r", text[:120])
+        # Si la query va al LLM (no es comando), mostrar "escribiendo..." en
+        # Telegram para que el usuario sepa que el bot esta procesando.
+        # sendChatAction expira a los ~5s; si el LLM tarda mas, no es critico.
+        is_command = text.lstrip().lower().startswith("/")
+        if not is_command:
+            self._send_chat_action(chat_id_in, "typing")
         try:
             reply = self._dispatch(text)
         except Exception as e:
@@ -183,6 +189,21 @@ class TelegramListener:
 
         if reply:
             self._send(chat_id_in, reply)
+
+    def _send_chat_action(self, chat_id: str, action: str) -> None:
+        """Manda sendChatAction (best-effort, sin esperar respuesta)."""
+        url = f"{TELEGRAM_API}/bot{self.bot_token}/sendChatAction"
+        body = json.dumps({"chat_id": chat_id, "action": action}).encode("utf-8")
+        req = urllib.request.Request(
+            url, data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            urllib.request.urlopen(req, timeout=3).close()
+        except Exception:
+            # No es critico — el indicador es nice-to-have
+            pass
 
     def _dispatch(self, text: str) -> str:
         lowered = text.lower().strip()
