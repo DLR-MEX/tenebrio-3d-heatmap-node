@@ -197,6 +197,8 @@
                     </div>
                 </div>
                 <div id="ai-banner-temp" class="ai-alert-banner" role="alert"></div>
+                <!-- Promedios agregados (tps, tpi) — informativos, no predichos -->
+                <div id="ai-extras-temp" class="ai-extras-row" aria-label="Promedios agregados"></div>
                 <div id="ai-cards-temp" class="ai-cards-grid"></div>
                 <div class="ai-chart-card">
                     <div class="ai-chart-head">
@@ -282,6 +284,12 @@
                         <span>Activar notificaciones</span>
                     </label>
 
+                    <label class="ai-cfg-row ai-cfg-toggle">
+                        <input type="checkbox" id="ai-cfg-listener" />
+                        <span>Permitir consultas al bot (agente IA conversacional)</span>
+                    </label>
+                    <p class="ai-cfg-hint" id="ai-cfg-listener-hint">Si activas esto, el bot responde mensajes que le mandes en lenguaje natural usando la API de Ollama Cloud. Consume tokens del LLM.</p>
+
                     <div id="ai-cfg-msg" class="ai-cfg-msg" aria-live="polite"></div>
 
                     <div class="ai-cfg-actions">
@@ -292,6 +300,38 @@
                     </div>
                 </form>
             </div>
+        </div>
+
+        <!-- Widget de chat IA (solo vista IA). Boton flotante 💬 abajo a la
+             derecha; al click expande el panel con scroll de mensajes y un
+             input para preguntar en lenguaje natural. Historial vive en
+             localStorage (max 30 mensajes). -->
+        <button id="ai-chat-fab" class="ai-chat-fab" type="button"
+                title="Preguntar al agente IA (C)" aria-label="Abrir chat">
+            <span class="ai-chat-fab-icon">💬</span>
+        </button>
+
+        <div id="ai-chat-panel" class="ai-chat-panel hidden" role="dialog"
+             aria-modal="false" aria-labelledby="ai-chat-title">
+            <div class="ai-chat-head">
+                <div class="ai-chat-head-title">
+                    <span class="ai-chat-head-icon">🤖</span>
+                    <span id="ai-chat-title">Tenebris AI</span>
+                    <span id="ai-chat-status" class="ai-chat-status">listo</span>
+                </div>
+                <button id="ai-chat-clear" class="ai-chat-clear" type="button"
+                        title="Borrar conversación" aria-label="Borrar conversación">🗑</button>
+                <button id="ai-chat-close" class="ai-chat-close" type="button"
+                        title="Cerrar" aria-label="Cerrar">✕</button>
+            </div>
+            <div id="ai-chat-messages" class="ai-chat-messages" role="log" aria-live="polite"></div>
+            <form id="ai-chat-form" class="ai-chat-form">
+                <textarea id="ai-chat-input" class="ai-chat-input"
+                          placeholder="Pregunta algo (Enter envia, Shift+Enter salto de linea)"
+                          rows="1" maxlength="2000"></textarea>
+                <button type="submit" id="ai-chat-send" class="ai-chat-send"
+                        title="Enviar (Enter)" aria-label="Enviar">➤</button>
+            </form>
         </div>
     </div>
 
@@ -304,6 +344,7 @@
             </div>
             <table class="ai-shortcuts-table">
                 <tr><td><kbd>V</kbd></td><td>Cambiar vista 3D ↔ IA</td></tr>
+                <tr><td><kbd>C</kbd></td><td>Abrir / cerrar chat IA (en vista IA)</td></tr>
                 <tr><td><kbd>T</kbd></td><td>Configurar Telegram (en vista IA)</td></tr>
                 <tr><td><kbd>M</kbd></td><td>Silenciar / activar sonido alerta</td></tr>
                 <tr><td><kbd>D</kbd></td><td>Modo demo (oculta header)</td></tr>

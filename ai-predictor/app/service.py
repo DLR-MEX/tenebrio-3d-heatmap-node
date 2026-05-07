@@ -26,12 +26,24 @@ import paho.mqtt.client as mqtt
 from dotenv import load_dotenv
 from tensorflow.keras.models import load_model
 
+from app.alert_log import AlertLog
+
 
 ROOT = Path(__file__).resolve().parent.parent
 MODELS_DIR = ROOT / "models"
 
 TEMP_VARS = ["t1", "t2", "t3", "t4", "t5", "tex"]
 HUM_VARS = ["h1", "h2", "h3", "h4", "h5", "hex"]
+
+# Variables informativas adicionales del dispositivo (no entran al modelo,
+# se muestran como contexto en el dashboard y son consultables por el agente).
+# tps = temperatura promedio superior, tpi = temperatura promedio inferior.
+# Provienen del mismo device Ubidots que t1..t5.
+EXTRA_TEMP_VARS = ["tps", "tpi"]
+EXTRA_VAR_LABELS = {
+    "tps": "Promedio superior",
+    "tpi": "Promedio inferior",
+}
 LOOK_BACK = 30
 STEP_AHEAD = 3
 HISTORY_MAX = 240  # ~ ultimas 240 predicciones por grupo en memoria
@@ -72,11 +84,25 @@ def build_alerts(current: dict, predicted: dict, var_names: list[str], group: st
 GROUP_LABELS = {"TEMP": "Temperatura", "HUM": "Humedad"}
 GROUP_UNITS = {"TEMP": "°C", "HUM": "%"}
 
+# Sensores exteriores (intemperie). Estan en el grupo TEMP/HUM por convenciencia
+# del modelo, pero no son alerta legitima — reflejan el clima de afuera. NO se
+# notifican via Telegram ni se registran como transiciones en el AlertLog.
+EXTERIOR_VARS = {"tex", "hex"}
+
 # Archivo de configuracion mutable en runtime (persiste cambios hechos
 # desde la UI). Se sobrescribe sobre los valores de .env al inicio. Nunca
 # guarda secretos: el bot_token solo vive en .env.
 RUNTIME_CONFIG_PATH = ROOT / "runtime_config.json"
-RUNTIME_ALLOWED_KEYS = {"telegram_enabled", "telegram_chat_id", "telegram_cooldown_sec"}
+RUNTIME_ALLOWED_KEYS = {
+    "telegram_enabled",
+    "telegram_chat_id",
+    "telegram_cooldown_sec",
+    # Si el bot debe responder mensajes entrantes con el agente IA.
+    # Default false (opt-in para evitar usar tokens del LLM sin querer).
+    "telegram_listener_enabled",
+    # Persistencia del cursor de getUpdates (no re-procesar mensajes en reinicio)
+    "telegram_last_update_id",
+}
 
 
 def load_runtime_config() -> dict:
@@ -124,7 +150,14 @@ class TelegramNotifier:
 
     TELEGRAM_API = "https://api.telegram.org"
 
-    def __init__(self, bot_token: str, chat_id: str, enabled: bool, cooldown_sec: float = 300.0):
+    def __init__(
+        self,
+        bot_token: str,
+        chat_id: str,
+        enabled: bool,
+        cooldown_sec: float = 300.0,
+        alert_log: Optional[AlertLog] = None,
+    ):
         self.bot_token = bot_token
         self.chat_id = chat_id
         self.enabled = bool(enabled and bot_token and chat_id)
@@ -133,6 +166,10 @@ class TelegramNotifier:
         self._prev_pred: dict[str, str] = {}  # var -> ultimo estado "predicted"
         self._last_sent: dict[tuple[str, str], float] = {}  # (var, kind) -> ts
         self._lock = threading.Lock()
+        # AlertLog persiste TODAS las transiciones (independiente del estado del
+        # notifier Telegram — incluso si Telegram esta apagado, queremos
+        # registrar las transiciones para que el agente pueda consultarlas)
+        self.alert_log = alert_log
         self.log = logging.getLogger("telegram")
         if self.enabled:
             self.log.info("Telegram notifier ACTIVO (cooldown=%.0fs)", cooldown_sec)
@@ -147,8 +184,10 @@ class TelegramNotifier:
         predicted_values: dict,
         alerts: dict,
     ) -> None:
-        if not self.enabled:
-            return
+        # AlertLog se actualiza SIEMPRE (independiente del estado del notifier
+        # Telegram), asi el agente IA puede consultar transiciones aunque
+        # Telegram este apagado. Telegram aplica cooldown adicional para
+        # limitar mensajes; AlertLog registra cada transicion sin cooldown.
         now = time.time()
         unit = GROUP_UNITS.get(group, "")
         group_label = GROUP_LABELS.get(group, group)
@@ -160,6 +199,10 @@ class TelegramNotifier:
 
         with self._lock:
             for var in var_names:
+                # Sensores exteriores: solo informativos, no son alerta.
+                # Saltamos por completo (ni alert log ni Telegram).
+                if var in EXTERIOR_VARS:
+                    continue
                 cur_state = alerts[var]["current"]
                 pred_state = alerts[var]["predicted"]
                 cur_val = current_values.get(var)
@@ -169,6 +212,25 @@ class TelegramNotifier:
                 prev_pred = self._prev_pred.get(var)
                 self._prev_cur[var] = cur_state
                 self._prev_pred[var] = pred_state
+
+                # Persistencia: SQLite alert log (sin cooldown, sin filtros)
+                if self.alert_log is not None:
+                    if prev_cur is not None and prev_cur != cur_state:
+                        self.alert_log.record(
+                            ts=now, group_name=group, var=var,
+                            prev_state=prev_cur, new_state=cur_state, kind="current",
+                            value=cur_val, predicted_value=pred_val,
+                        )
+                    if prev_pred is not None and prev_pred != pred_state:
+                        self.alert_log.record(
+                            ts=now, group_name=group, var=var,
+                            prev_state=prev_pred, new_state=pred_state, kind="predicted",
+                            value=cur_val, predicted_value=pred_val,
+                        )
+
+                # Telegram: solo si esta habilitado y con cooldown
+                if not self.enabled:
+                    continue
 
                 # 1) PELIGRO inmediato: actual paso a abnormal
                 if cur_state == "abnormal" and prev_cur != "abnormal":
@@ -315,6 +377,100 @@ class TelegramNotifier:
             self.log.warning("Telegram envio fallo: %s", e)
 
 
+# ---------- Rate-of-change detector ----------
+
+class RateOfChangeDetector:
+    """Capa REACTIVA complementaria al modelo predictivo.
+
+    El GRU predice +3min asumiendo continuidad — saltos abruptos los detecta
+    tarde. Este detector mira la diferencia entre muestras CONSECUTIVAS por
+    sensor y dispara alerta inmediata si supera el umbral.
+
+    No reemplaza al modelo, lo complementa: el modelo capta tendencias suaves;
+    este capta cambios bruscos. Excluye sensores exteriores (tex, hex).
+    """
+
+    # Umbral por grupo. Las muestras llegan ~cada 1 min vía MQTT, asi que estos
+    # son delta entre lecturas consecutivas del mismo sensor.
+    DEFAULT_THRESHOLDS = {"TEMP": 0.5, "HUM": 5.0}
+    # Si la muestra previa es muy vieja, no comparamos (probablemente es el
+    # primer dato tras reconexion MQTT u otra discontinuidad).
+    MAX_GAP_SEC = 5 * 60
+    # Cooldown por sensor para no spammear si el ambiente esta inestable.
+    COOLDOWN_SEC = 5 * 60
+
+    def __init__(self, alert_log: Optional[AlertLog], thresholds: Optional[dict] = None):
+        self.alert_log = alert_log
+        self.thresholds = {**self.DEFAULT_THRESHOLDS, **(thresholds or {})}
+        self._last_seen: dict[str, tuple[float, float]] = {}  # var -> (ts_sec, value)
+        self._last_alert: dict[str, float] = {}  # var -> ts_sec
+        self._lock = threading.Lock()
+        self.log = logging.getLogger("rate-of-change")
+        # callback opcional inyectado por PredictionService
+        self._on_jump = None  # type: Optional[callable]
+
+    def set_jump_callback(self, cb) -> None:
+        """cb(group, var, ts, prev_val, cur_val, delta) -> None
+        Lo invoca el PredictionService para enviar Telegram + broadcast SSE."""
+        self._on_jump = cb
+
+    def observe(self, group: str, var: str, value: float, ts: Optional[float] = None) -> None:
+        """Llamado en cada lectura MQTT. ts en epoch seconds (default: ahora)."""
+        if var in EXTERIOR_VARS:
+            return
+        threshold = self.thresholds.get(group)
+        if threshold is None:
+            return
+        if ts is None:
+            ts = time.time()
+
+        # Captura el estado para evaluar fuera del lock
+        delta = None
+        prev_val = None
+        prev_ts = None
+        with self._lock:
+            prev = self._last_seen.get(var)
+            self._last_seen[var] = (ts, value)
+            if prev is None:
+                return
+            prev_ts, prev_val = prev
+            dt = ts - prev_ts
+            if dt <= 0 or dt > self.MAX_GAP_SEC:
+                return
+            delta = value - prev_val
+            if abs(delta) < threshold:
+                return
+            last_alert = self._last_alert.get(var, 0.0)
+            if (ts - last_alert) < self.COOLDOWN_SEC:
+                return
+            self._last_alert[var] = ts
+
+        # Llegamos aqui: salto detectado fuera de cooldown
+        direction = "subida" if delta > 0 else "bajada"
+        self.log.warning(
+            "SALTO %s en %s (%s): %.2f -> %.2f en %.0fs (delta %+.2f, umbral %.2f)",
+            direction, var, group, prev_val, value, ts - prev_ts, delta, threshold,
+        )
+        # Persistir en alert_log con kind="jump" — el agente IA lo reportara
+        # como evento separado de las transiciones ok<->abnormal.
+        if self.alert_log is not None:
+            self.alert_log.record(
+                ts=ts,
+                group_name=group,
+                var=var,
+                prev_state=f"{prev_val:.2f}",
+                new_state=f"{value:.2f}",
+                kind="jump",
+                value=value,
+                predicted_value=delta,  # delta absoluto en el campo predicted_value
+            )
+        if self._on_jump:
+            try:
+                self._on_jump(group, var, ts, prev_val, value, delta)
+            except Exception as e:
+                self.log.warning("on_jump callback fallo: %s", e)
+
+
 # ---------- Config ----------
 
 @dataclass
@@ -334,6 +490,11 @@ class Config:
     telegram_bot_token: str
     telegram_chat_id: str
     telegram_cooldown_sec: float
+    telegram_listener_enabled: bool
+    agent_enabled: bool
+    ollama_api_key: str
+    ollama_host: str
+    ollama_model: str
 
     @classmethod
     def load(cls) -> "Config":
@@ -360,6 +521,11 @@ class Config:
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
             telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip(),
             telegram_cooldown_sec=float(os.getenv("TELEGRAM_COOLDOWN_SEC", "300")),
+            telegram_listener_enabled=os.getenv("TELEGRAM_LISTENER_ENABLED", "false").lower() == "true",
+            agent_enabled=os.getenv("AGENT_ENABLED", "true").lower() == "true",
+            ollama_api_key=os.getenv("OLLAMA_API_KEY", "").strip(),
+            ollama_host=os.getenv("OLLAMA_HOST", "https://ollama.com").strip(),
+            ollama_model=os.getenv("OLLAMA_MODEL", "gpt-oss:120b").strip(),
         )
 
     def with_runtime_overrides(self) -> "Config":
@@ -374,6 +540,7 @@ class Config:
                 "telegram_enabled": bool(rt.get("telegram_enabled", self.telegram_enabled)),
                 "telegram_chat_id": str(rt.get("telegram_chat_id", self.telegram_chat_id)),
                 "telegram_cooldown_sec": float(rt.get("telegram_cooldown_sec", self.telegram_cooldown_sec)),
+                "telegram_listener_enabled": bool(rt.get("telegram_listener_enabled", self.telegram_listener_enabled)),
             }
         )
 
@@ -422,6 +589,61 @@ class UbidotsHTTP:
         rows = [(int(r["timestamp"]), float(r["value"])) for r in data.get("results", [])]
         rows.reverse()
         return rows
+
+    def get_values_range(
+        self, variable_id: str, start_ms: int, end_ms: int, max_points: int = 5000
+    ) -> list[tuple[int, float]]:
+        """Devuelve (timestamp_ms, value) en el rango [start_ms, end_ms].
+        Pagina la respuesta de Ubidots; corta en max_points para no inflar
+        la memoria si el usuario pide rangos huge."""
+        rows: list[tuple[int, float]] = []
+        # Ubidots permite end y start en /values/?start=&end=&page_size=
+        page_size = min(max_points, 1000)
+        try:
+            url = (
+                f"/api/v1.6/variables/{variable_id}/values/"
+                f"?start={start_ms}&end={end_ms}&page_size={page_size}"
+            )
+            data = self._get(url)
+            for r in data.get("results", []):
+                rows.append((int(r["timestamp"]), float(r["value"])))
+                if len(rows) >= max_points:
+                    break
+        except urllib.error.HTTPError as e:
+            self.log.error("Error fetching range var=%s: %s", variable_id, e)
+            return []
+        rows.reverse()  # Ubidots devuelve descendente; queremos ascendente
+        return rows
+
+    def get_values_range_by_label(
+        self, device_label: str, var_label: str, start_ms: int, end_ms: int,
+        max_points: int = 5000,
+    ) -> list[dict]:
+        """Igual que get_values_range pero usando device label + var label
+        (no requiere var_id). Devuelve la lista cruda de Ubidots para ser
+        consumida por Express (que ya espera ese formato).
+
+        Cada item tiene al menos {timestamp, value}. Ascendente por ts.
+        """
+        page_size = min(max_points, 1000)
+        try:
+            url = (
+                f"/api/v1.6/devices/{device_label}/{var_label}/values/"
+                f"?start={start_ms}&end={end_ms}&page_size={page_size}"
+            )
+            data = self._get(url)
+            results = data.get("results", []) or []
+            # Ubidots devuelve descendente; ordenamos ascendente por ts.
+            results.sort(key=lambda r: r.get("timestamp") or 0)
+            if len(results) > max_points:
+                results = results[:max_points]
+            return results
+        except urllib.error.HTTPError as e:
+            self.log.error("Error fetching range device=%s var=%s: %s", device_label, var_label, e)
+            return []
+        except Exception as e:
+            self.log.error("Error inesperado var=%s: %s", var_label, e)
+            return []
 
 
 # ---------- Buffer ----------
@@ -506,15 +728,32 @@ class PredictionService:
         self.temp_bucket = SampleBucket(TEMP_VARS, cfg.bucket_timeout_sec)
         self.hum_bucket = SampleBucket(HUM_VARS, cfg.bucket_timeout_sec)
 
+        # SQLite local para persistencia de transiciones de estado.
+        # Alimenta al agente IA para responder "hubo anomalias ayer?".
+        self.alert_log = AlertLog(ROOT / "alert_log.sqlite")
+
+        # Detector de saltos abruptos (capa reactiva complementaria al GRU).
+        # El GRU es buen prediciendo tendencias suaves pero suaviza saltos
+        # — este detector dispara alerta inmediata cuando el delta entre
+        # muestras consecutivas supera el umbral.
+        self.rate_detector = RateOfChangeDetector(alert_log=self.alert_log)
+        self.rate_detector.set_jump_callback(self._on_rate_jump)
+
         # Aplicar runtime_config.json (cambios persistidos desde la UI)
         # encima de los valores de .env. El bot_token nunca se sobrescribe.
         effective_cfg = cfg.with_runtime_overrides()
+        self.effective_cfg = effective_cfg
         self.telegram = TelegramNotifier(
             bot_token=cfg.telegram_bot_token,  # siempre del .env
             chat_id=effective_cfg.telegram_chat_id,
             enabled=effective_cfg.telegram_enabled,
             cooldown_sec=effective_cfg.telegram_cooldown_sec,
+            alert_log=self.alert_log,
         )
+        # Listener bidireccional. Se construye en attach_agent() porque
+        # depende del AgentService, que se crea despues del PredictionService
+        # en main.lifespan().
+        self.telegram_listener = None  # type: Optional["TelegramListener"]
 
         # estado compartido
         self._state_lock = threading.Lock()
@@ -522,6 +761,9 @@ class PredictionService:
             "TEMP": {"current": {}, "predicted": {}, "alerts": {}, "ts": None},
             "HUM": {"current": {}, "predicted": {}, "alerts": {}, "ts": None},
         }
+        # Variables informativas del device (no entran al predictor): tps/tpi.
+        # var -> {"value": float, "ts": float}. Las refrescamos en cada msg MQTT.
+        self.extras: dict[str, dict] = {}
         self.history: dict[str, deque[dict]] = {
             "TEMP": deque(maxlen=HISTORY_MAX),
             "HUM": deque(maxlen=HISTORY_MAX),
@@ -553,6 +795,48 @@ class PredictionService:
 
     def attach_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
+
+    def attach_agent(self, agent) -> None:
+        """Llamado desde main.lifespan() despues de crear el AgentService.
+        Construye el TelegramListener si bot_token, chat_id y agent estan listos.
+        """
+        # Import dentro para evitar ciclos en tiempo de carga
+        from app.telegram_bot import TelegramListener
+
+        if not self.cfg.telegram_bot_token:
+            self.log.info("TelegramListener no creado (sin TELEGRAM_BOT_TOKEN)")
+            return
+
+        def _save_offset(offset_int: int) -> None:
+            current = load_runtime_config()
+            current["telegram_last_update_id"] = int(offset_int)
+            save_runtime_config(current)
+
+        def _load_offset() -> int:
+            current = load_runtime_config()
+            try:
+                return int(current.get("telegram_last_update_id") or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        self.telegram_listener = TelegramListener(
+            bot_token=self.cfg.telegram_bot_token,
+            chat_id=self.telegram.chat_id,
+            agent=agent,
+            prediction_service=self,
+            alert_log=self.alert_log,
+            save_offset_cb=_save_offset,
+            load_offset_cb=_load_offset,
+        )
+        # Solo arranca si el flag runtime esta en true (opt-in)
+        if self.effective_cfg.telegram_listener_enabled and agent and agent.ready:
+            self.telegram_listener.update_settings(enabled=True)
+        else:
+            self.log.info(
+                "TelegramListener creado pero no arrancado (listener_enabled=%s agent_ready=%s)",
+                self.effective_cfg.telegram_listener_enabled,
+                agent.ready if agent else False,
+            )
 
     def subscribe(self) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=64)
@@ -596,10 +880,27 @@ class PredictionService:
                     "TEMP": {"min": TEMP_OPTIMAL_MIN, "max": TEMP_OPTIMAL_MAX},
                     "HUM":  {"min": HUM_OPTIMAL_MIN,  "max": HUM_OPTIMAL_MAX},
                 },
+                # Variables informativas adicionales (tps, tpi). Snapshot ligero;
+                # los updates van por broadcast type='extra'.
+                "extras": {
+                    var: {
+                        "label": EXTRA_VAR_LABELS.get(var, var),
+                        "value": data.get("value"),
+                        "ts": data.get("ts"),
+                        "unit": "°C",
+                    }
+                    for var, data in self.extras.items()
+                },
             }
 
     def start(self) -> None:
         self.started_at = time.time()
+        # Limpiar registros mas viejos de 30 dias en cada arranque (no diario,
+        # pero suficiente para que el SQLite no crezca indefinidamente)
+        try:
+            self.alert_log.cleanup(older_than_days=30)
+        except Exception as e:
+            self.log.warning("AlertLog cleanup fallo: %s", e)
         if self.cfg.prefill_from_api:
             try:
                 self._prefill_buffers()
@@ -653,8 +954,17 @@ class PredictionService:
 
     def stop(self) -> None:
         self._stop.set()
+        if self.telegram_listener is not None:
+            try:
+                self.telegram_listener.stop()
+            except Exception:
+                pass
         self.client.loop_stop()
         self.client.disconnect()
+        try:
+            self.alert_log.close()
+        except Exception:
+            pass
         self.log.info("Servicio detenido.")
 
     def update_telegram_settings(
@@ -662,19 +972,40 @@ class PredictionService:
         chat_id: Optional[str] = None,
         enabled: Optional[bool] = None,
         cooldown_sec: Optional[float] = None,
+        listener_enabled: Optional[bool] = None,
     ) -> dict:
-        """Actualiza el notifier en memoria Y persiste a runtime_config.json."""
+        """Actualiza el notifier en memoria Y persiste a runtime_config.json.
+        El listener se controla con listener_enabled (independiente del notifier
+        de salida; uno puede mandar alertas sin escuchar y viceversa)."""
         snap = self.telegram.update_settings(
             chat_id=chat_id, enabled=enabled, cooldown_sec=cooldown_sec,
         )
+
+        # Aplicar al listener si existe.
+        if self.telegram_listener is not None:
+            self.telegram_listener.update_settings(
+                chat_id=self.telegram.chat_id,
+                enabled=listener_enabled,
+            )
+            snap["listener_enabled"] = self.telegram_listener.enabled
+        else:
+            snap["listener_enabled"] = False
+
         # Persistir lo que el notifier acepto (no necesariamente lo que se pidio,
         # ej. enabled puede quedar false si no hay token o chat_id).
         try:
-            save_runtime_config({
+            persist = {
                 "telegram_chat_id": self.telegram.chat_id,
                 "telegram_enabled": self.telegram.enabled,
                 "telegram_cooldown_sec": self.telegram.cooldown_sec,
-            })
+            }
+            if self.telegram_listener is not None:
+                persist["telegram_listener_enabled"] = self.telegram_listener.enabled
+            # Preservar last_update_id si existe
+            existing = load_runtime_config()
+            if "telegram_last_update_id" in existing:
+                persist["telegram_last_update_id"] = existing["telegram_last_update_id"]
+            save_runtime_config(persist)
         except Exception as e:
             self.log.warning("No se pudo guardar runtime_config.json: %s", e)
         return snap
@@ -752,13 +1083,57 @@ class PredictionService:
             return
 
         if var in TEMP_VARS:
+            self.rate_detector.observe("TEMP", var, value)
             sample = self.temp_bucket.update(var, value)
             if sample is not None:
                 self._handle_sample(self.temp_predictor, sample, "TEMP")
         elif var in HUM_VARS:
+            self.rate_detector.observe("HUM", var, value)
             sample = self.hum_bucket.update(var, value)
             if sample is not None:
                 self._handle_sample(self.hum_predictor, sample, "HUM")
+        elif var in EXTRA_TEMP_VARS:
+            # tps/tpi: solo informativo. Guardamos y broadcasteamos para que
+            # el dashboard muestre el valor actual; no entra al predictor.
+            ts = time.time()
+            with self._state_lock:
+                self.extras[var] = {"value": value, "ts": ts}
+            self._broadcast({
+                "type": "extra",
+                "var": var,
+                "label": EXTRA_VAR_LABELS.get(var, var),
+                "value": value,
+                "ts": ts,
+                "unit": "°C",
+            })
+
+    def _on_rate_jump(self, group: str, var: str, ts: float, prev_val: float,
+                     cur_val: float, delta: float) -> None:
+        """Disparado por el RateOfChangeDetector. Notifica via SSE y Telegram."""
+        unit = GROUP_UNITS.get(group, "")
+        group_label = GROUP_LABELS.get(group, group)
+        # Broadcast al dashboard (los clientes SSE pueden mostrar un toast)
+        self._broadcast({
+            "type": "jump",
+            "group": group,
+            "var": var,
+            "ts": ts,
+            "prev_value": prev_val,
+            "current_value": cur_val,
+            "delta": delta,
+            "unit": unit,
+        })
+        # Telegram (usa la misma instancia y respeta su enabled)
+        if self.telegram and self.telegram.enabled:
+            arrow = "📈" if delta > 0 else "📉"
+            text = (
+                f"{arrow} *Salto detectado* — {group_label}\n"
+                f"Sensor *{var}*: `{prev_val:.2f}{unit}` → `{cur_val:.2f}{unit}` "
+                f"(Δ `{delta:+.2f}{unit}`)\n"
+                f"_Cambio brusco entre muestras consecutivas — el modelo "
+                f"predictivo no captura saltos de este tamaño._"
+            )
+            self.telegram._send_async(text)
 
     # ---- inferencia + broadcast ----
 
