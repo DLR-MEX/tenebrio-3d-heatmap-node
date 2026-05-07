@@ -103,6 +103,11 @@ TU ROL:
 - Para preguntas históricas (últimas X horas, ayer, esta semana): usa get_history_ubidots.
 - Para preguntas sobre alertas/anomalías pasadas: usa get_recent_alerts.
 - Para preguntas sobre rangos óptimos: usa get_thresholds.
+- Cuando el usuario pida una GRÁFICA, "plot", "muéstrame la curva",
+  "visualización" o "gráfico" — usa plot_history. La gráfica se
+  renderiza inline en el widget; tu solo añade un breve comentario
+  con stats relevantes (min/max/avg, picos, tendencias) — NO repitas
+  todos los puntos numericos en tu texto.
 - Si no tienes la información, di que no la tienes — no inventes.
 - Si una pregunta es ambigua (qué sensor?), pide aclaración.
 - No tienes capacidad de cambiar nada del sistema; eres solo informativo.
@@ -241,6 +246,49 @@ def _tool_schemas() -> list[dict]:
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "plot_history",
+                "description": (
+                    "Genera una GRAFICA de líneas con el histórico de uno o varios "
+                    "sensores. La gráfica se dibuja inline en el chat (no devuelve "
+                    "texto extenso). Úsala cuando el usuario pida 'gráfica', "
+                    "'plot', 'curva', 'visualización' o 'muéstrame'. Para varios "
+                    "sensores pásalos en 'vars' como lista (ej. ['t1','t2','t3'])."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "vars": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "Sensores a graficar. Ej. ['t1','t2','t3'] para "
+                                "comparar interiores; ['t1','tex'] para interior vs "
+                                "exterior. Min 1, max 6."
+                            ),
+                        },
+                        "hours": {
+                            "type": "number",
+                            "description": "Horas hacia atrás (default 6, max 168 = 7 días).",
+                        },
+                        "title": {
+                            "type": "string",
+                            "description": "Título opcional para la gráfica.",
+                        },
+                        "include_predictions": {
+                            "type": "boolean",
+                            "description": (
+                                "Si true, también traza la versión _pred (predicción). "
+                                "Default false."
+                            ),
+                        },
+                    },
+                    "required": ["vars"],
+                },
+            },
+        },
     ]
 
 
@@ -359,6 +407,9 @@ class AgentService:
             messages = [{"role": "system", "content": SYSTEM_PROMPT}] + messages
 
         tool_calls_summary: list[dict] = []
+        # Charts emitidos por la tool plot_history. Se devuelven al cliente
+        # en el campo 'charts' del response asi el widget los renderiza inline.
+        charts: list[dict] = []
         tools = _tool_schemas()
 
         for loop_idx in range(self.MAX_TOOL_LOOPS):
@@ -403,6 +454,7 @@ class AgentService:
                 return {
                     "reply": msg.get("content") or "",
                     "tool_calls": tool_calls_summary,
+                    "charts": charts,
                     "model": self.model,
                 }
 
@@ -423,10 +475,22 @@ class AgentService:
                 except Exception as e:
                     log.warning("Tool %s fallo: %s", name, e)
                     result = {"error": str(e)}
+
+                # Si el tool emitió un chart, lo guardamos para el cliente y
+                # mandamos solo el summary al LLM (los puntos no le sirven y
+                # saturan el contexto).
+                tool_payload_for_llm = result
+                if isinstance(result, dict) and "chart_spec" in result:
+                    charts.append(result["chart_spec"])
+                    tool_payload_for_llm = {
+                        "chart_rendered": True,
+                        "summary": result.get("summary"),
+                        "_note": result.get("_note"),
+                    }
                 messages.append({
                     "role": "tool",
                     "name": name,
-                    "content": json.dumps(result, default=str)[:8000],  # cap por si acaso
+                    "content": json.dumps(tool_payload_for_llm, default=str)[:8000],
                 })
 
         # Si llegamos aca, el modelo no termino. Devolvemos lo que tenemos.
@@ -434,6 +498,7 @@ class AgentService:
         return {
             "reply": "Disculpa, no pude completar la consulta (demasiados pasos). Intenta reformular la pregunta.",
             "tool_calls": tool_calls_summary,
+            "charts": charts,
             "model": self.model,
         }
 
@@ -450,6 +515,8 @@ class AgentService:
             return self._tool_history(args, predicted=False)
         if name == "get_predictions_history":
             return self._tool_history(args, predicted=True)
+        if name == "plot_history":
+            return self._tool_plot(args)
         return {"error": f"tool desconocida: {name}"}
 
     def _tool_current_state(self) -> dict:
@@ -770,6 +837,125 @@ class AgentService:
                     "vuelve a llamar get_history_ubidots con un hours mayor (max 168 = 7 dias)."
                 )
         return out
+
+    # Paleta consistente con cards.js (TEMP_HUES + HUM_HUES)
+    _PLOT_COLORS = [
+        "#38bdf8", "#22d3ee", "#a78bfa", "#f472b6", "#fb923c", "#facc15",
+        "#34d399", "#10b981", "#06b6d4", "#3b82f6", "#8b5cf6", "#f43f5e",
+    ]
+
+    def _tool_plot(self, args: dict) -> dict:
+        """Construye un chart_spec con series temporales para que el widget
+        lo renderice con ECharts. Limita: max 6 vars, max 168h, max 200 puntos
+        por serie (submuestreo automatico)."""
+        raw_vars = args.get("vars") or []
+        if isinstance(raw_vars, str):
+            # tolerancia: el LLM a veces manda string en lugar de lista
+            raw_vars = [v.strip() for v in raw_vars.split(",") if v.strip()]
+        if not isinstance(raw_vars, list) or not raw_vars:
+            return {"error": "vars debe ser una lista no vacia (ej. ['t1','t2'])"}
+        # Sanitizar y deduplicar
+        valid = {"t1","t2","t3","t4","t5","tex","h1","h2","h3","h4","h5","hex","tps","tpi"}
+        vars_clean = []
+        for v in raw_vars[:6]:
+            v = str(v).strip().lower()
+            if v in valid and v not in vars_clean:
+                vars_clean.append(v)
+        if not vars_clean:
+            return {"error": f"ninguna de {raw_vars} es un sensor valido"}
+
+        hours = float(args.get("hours") or 6)
+        hours = max(0.1, min(hours, 168))
+        title = (args.get("title") or "").strip() or self._auto_title(vars_clean, hours)
+        include_pred = bool(args.get("include_predictions"))
+
+        from app.service import UbidotsHTTP
+        http = UbidotsHTTP(self.prediction_service.cfg.token)
+        end_ms = int(time.time() * 1000)
+        start_ms = end_ms - int(hours * 3600 * 1000)
+
+        series = []
+        # Determinar unidad: si todos son TEMP -> °C, si todos HUM -> %, mixto -> ''
+        is_temp = all(v.startswith("t") for v in vars_clean)
+        is_hum = all(v.startswith("h") for v in vars_clean)
+        unit = "°C" if is_temp else ("%" if is_hum else "")
+
+        for idx, v in enumerate(vars_clean):
+            for predicted in ([False, True] if include_pred else [False]):
+                label = f"{v}_pred" if predicted else v
+                var_id = self._resolve_var_id(label)
+                if not var_id:
+                    continue
+                rows = http.get_values_range(var_id, start_ms, end_ms, max_points=2000)
+                if not rows:
+                    continue
+                # Submuestrear a max 200 puntos para no saturar el chart
+                if len(rows) > 200:
+                    step = len(rows) // 200
+                    rows = rows[::step][:200]
+                color_idx = (idx + (6 if predicted else 0)) % len(self._PLOT_COLORS)
+                series.append({
+                    "name": label,
+                    "color": self._PLOT_COLORS[color_idx],
+                    "dashed": predicted,
+                    # ECharts espera [ts_ms, value] por punto
+                    "data": [[t, round(v_, 3)] for t, v_ in rows],
+                })
+
+        if not series:
+            return {"error": "no se pudieron obtener datos para las variables solicitadas"}
+
+        # Calcular thresholds para markLines si aplica
+        threshold_lines = None
+        if is_temp:
+            from app.service import TEMP_OPTIMAL_MIN, TEMP_OPTIMAL_MAX
+            threshold_lines = {"min": TEMP_OPTIMAL_MIN, "max": TEMP_OPTIMAL_MAX}
+        elif is_hum:
+            from app.service import HUM_OPTIMAL_MIN, HUM_OPTIMAL_MAX
+            threshold_lines = {"min": HUM_OPTIMAL_MIN, "max": HUM_OPTIMAL_MAX}
+
+        chart_spec = {
+            "type": "line",
+            "title": title,
+            "unit": unit,
+            "hours": hours,
+            "series": series,
+            "thresholds": threshold_lines,
+        }
+        # Devolvemos el chart_spec PERO tambien un resumen breve de stats al
+        # LLM para que pueda comentar la grafica en su texto sin tener que
+        # escanear todos los puntos.
+        summary = []
+        for s in series:
+            vals = [d[1] for d in s["data"]]
+            if not vals: continue
+            summary.append({
+                "name": s["name"],
+                "min": round(min(vals), 2),
+                "max": round(max(vals), 2),
+                "avg": round(sum(vals) / len(vals), 2),
+                "n": len(vals),
+            })
+        return {
+            "chart_spec": chart_spec,
+            "summary": summary,
+            "_note": (
+                "El chart_spec se renderiza inline en el widget de chat. "
+                "En tu respuesta NO repitas todos los puntos — solo comenta "
+                "los stats (min/max/avg) y patrones relevantes."
+            ),
+        }
+
+    def _auto_title(self, vars_list: list[str], hours: float) -> str:
+        if hours < 1:
+            period = f"últimos {int(hours * 60)} min"
+        elif hours <= 24:
+            period = f"últimas {hours:g} h"
+        else:
+            period = f"últimos {hours / 24:g} días"
+        if len(vars_list) == 1:
+            return f"{vars_list[0]} — {period}"
+        return f"{', '.join(vars_list)} — {period}"
 
     def _resolve_var_id(self, label: str) -> Optional[str]:
         """Cache de var label -> Ubidots variable ID. Llena toda la lista al primer miss."""

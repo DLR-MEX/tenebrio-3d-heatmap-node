@@ -135,6 +135,17 @@ function appendMessage(m, scroll = true) {
     el.className = `ai-chat-msg ai-chat-msg-${m.role === 'user' ? 'user' : (m.role === 'error' ? 'error' : 'assistant')}`;
     el.innerHTML = renderMarkdownLite(m.content || '');
 
+    // Charts inline: cada chart_spec se renderiza como un canvas ECharts
+    if (m.charts && m.charts.length > 0) {
+        for (const spec of m.charts) {
+            try {
+                renderChartInto(el, spec);
+            } catch (e) {
+                console.error('chart render fail', e);
+            }
+        }
+    }
+
     if (m.tools && m.tools.length > 0) {
         const tools = document.createElement('div');
         tools.className = 'ai-chat-tools';
@@ -144,6 +155,92 @@ function appendMessage(m, scroll = true) {
 
     msgsEl.appendChild(el);
     if (scroll) msgsEl.scrollTop = msgsEl.scrollHeight;
+}
+
+// Crea un contenedor + instancia ECharts dentro del mensaje.
+function renderChartInto(parentEl, spec) {
+    if (!window.echarts) {
+        const fallback = document.createElement('div');
+        fallback.className = 'ai-chat-chart-error';
+        fallback.textContent = '⚠ ECharts no cargado';
+        parentEl.appendChild(fallback);
+        return;
+    }
+    const wrap = document.createElement('div');
+    wrap.className = 'ai-chat-chart';
+    parentEl.appendChild(wrap);
+
+    // Construir option ECharts a partir del spec
+    const series = (spec.series || []).map((s) => ({
+        name: s.name,
+        type: 'line',
+        showSymbol: false,
+        smooth: true,
+        lineStyle: {
+            color: s.color || '#E8B830',
+            width: 2,
+            type: s.dashed ? 'dashed' : 'solid',
+        },
+        itemStyle: { color: s.color || '#E8B830' },
+        data: s.data || [],
+    }));
+
+    const markLine = spec.thresholds ? {
+        symbol: 'none',
+        lineStyle: { color: '#ef4444', type: 'dashed', width: 1, opacity: 0.7 },
+        label: { show: true, formatter: '{b}', color: '#ef4444', fontSize: 10 },
+        data: [
+            { name: `min ${spec.thresholds.min}`, yAxis: spec.thresholds.min },
+            { name: `max ${spec.thresholds.max}`, yAxis: spec.thresholds.max },
+        ],
+    } : undefined;
+    if (markLine && series.length > 0) {
+        series[0].markLine = markLine;
+    }
+
+    const isLight = document.querySelector('.ai-dashboard')?.dataset?.theme === 'light';
+    const textColor = isLight ? '#1a2630' : '#E0E5E8';
+    const axisColor = isLight ? '#94a3b8' : '#5b7888';
+
+    const option = {
+        title: spec.title ? {
+            text: spec.title,
+            left: 'center',
+            textStyle: { color: textColor, fontSize: 12, fontWeight: 600 },
+        } : undefined,
+        animation: true,
+        grid: { left: 50, right: 14, top: spec.title ? 38 : 14, bottom: 28 },
+        legend: series.length > 1 ? {
+            top: spec.title ? 22 : 4,
+            textStyle: { color: textColor, fontSize: 10 },
+            itemWidth: 14, itemHeight: 8,
+        } : undefined,
+        tooltip: {
+            trigger: 'axis',
+            valueFormatter: (v) => `${Number(v).toFixed(2)}${spec.unit || ''}`,
+        },
+        xAxis: {
+            type: 'time',
+            axisLabel: { color: axisColor, fontSize: 10, hideOverlap: true },
+            axisLine: { lineStyle: { color: axisColor } },
+        },
+        yAxis: {
+            type: 'value',
+            scale: true,
+            axisLabel: {
+                color: axisColor, fontSize: 10,
+                formatter: (v) => `${v}${spec.unit || ''}`,
+            },
+            axisLine: { lineStyle: { color: axisColor } },
+            splitLine: { lineStyle: { color: axisColor, opacity: 0.15 } },
+        },
+        series,
+    };
+    const chart = window.echarts.init(wrap, null, { renderer: 'canvas' });
+    chart.setOption(option);
+    // Re-size cuando cambia el panel
+    const ro = new ResizeObserver(() => chart.resize());
+    ro.observe(wrap);
 }
 
 // Markdown lite a mano: negritas **x**, codigo `x`, listas (- x), tablas
@@ -297,6 +394,7 @@ async function onSubmit(e) {
             role: 'assistant',
             content: reply,
             tools: data.tool_calls || [],
+            charts: data.charts || [],
         };
         history.push(assistantMsg);
         saveHistory();

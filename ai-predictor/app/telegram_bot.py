@@ -19,13 +19,16 @@ re-procesar mensajes en reinicios.
 
 from __future__ import annotations
 
+import io
 import json
 import logging
+import mimetypes
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
@@ -181,13 +184,31 @@ class TelegramListener:
         is_command = text.lstrip().lower().startswith("/")
         if not is_command:
             self._send_chat_action(chat_id_in, "typing")
+        charts = []
         try:
-            reply = self._dispatch(text)
+            reply, charts = self._dispatch(text)
         except Exception as e:
             log.exception("Error procesando mensaje: %s", e)
             reply = "Disculpa, no pude procesar tu mensaje. Intenta de nuevo."
 
-        if reply:
+        # Si el agente emitio gráficas, las mandamos como fotos (con la
+        # respuesta como caption de la primera). Si no, mandamos solo texto.
+        if charts:
+            self._send_photo_action(chat_id_in)
+            for i, spec in enumerate(charts):
+                try:
+                    png = _render_chart_png(spec)
+                except Exception as e:
+                    log.warning("Render chart fallo: %s", e)
+                    png = None
+                if png is None:
+                    continue
+                caption = reply if i == 0 else ""
+                self._send_photo(chat_id_in, png, caption)
+            # Si no se pudo renderizar ninguna grafica pero hay texto, manda texto
+            if reply and not any(charts):
+                self._send(chat_id_in, reply)
+        elif reply:
             self._send(chat_id_in, reply)
 
     def _send_chat_action(self, chat_id: str, action: str) -> None:
@@ -205,21 +226,81 @@ class TelegramListener:
             # No es critico — el indicador es nice-to-have
             pass
 
-    def _dispatch(self, text: str) -> str:
+    def _send_photo_action(self, chat_id: str) -> None:
+        self._send_chat_action(chat_id, "upload_photo")
+
+    def _send_photo(self, chat_id: str, png_bytes: bytes, caption: str = "") -> None:
+        """Manda una foto via sendPhoto (multipart/form-data)."""
+        url = f"{TELEGRAM_API}/bot{self.bot_token}/sendPhoto"
+        boundary = uuid.uuid4().hex
+        # Telegram limita caption a 1024 chars en sendPhoto. Truncamos con
+        # ellipsis para no perder la respuesta entera.
+        if len(caption) > 1020:
+            caption = caption[:1020] + "..."
+        # Convertir tablas markdown si vienen en el caption (consistencia
+        # con _send normal)
+        caption = _markdown_tables_to_bullets(caption) if caption else ""
+
+        parts = []
+        # Campos texto
+        for field, value in (
+            ("chat_id", chat_id),
+            ("caption", caption),
+            ("parse_mode", "Markdown"),
+        ):
+            parts.append(f"--{boundary}\r\n".encode())
+            parts.append(
+                f'Content-Disposition: form-data; name="{field}"\r\n\r\n'.encode()
+            )
+            parts.append(value.encode("utf-8"))
+            parts.append(b"\r\n")
+        # Foto
+        parts.append(f"--{boundary}\r\n".encode())
+        parts.append(
+            b'Content-Disposition: form-data; name="photo"; filename="chart.png"\r\n'
+            b"Content-Type: image/png\r\n\r\n"
+        )
+        parts.append(png_bytes)
+        parts.append(b"\r\n")
+        parts.append(f"--{boundary}--\r\n".encode())
+        body = b"".join(parts)
+        req = urllib.request.Request(
+            url, data=body,
+            headers={
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+                "Content-Length": str(len(body)),
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=15) as r:
+                if getattr(r, "status", 200) >= 300:
+                    log.warning("sendPhoto status=%s", r.status)
+        except urllib.error.HTTPError as e:
+            try:
+                err_body = e.read().decode("utf-8", errors="replace")
+            except Exception:
+                err_body = ""
+            log.warning("sendPhoto HTTP %s: %s body=%s", e.code, e.reason, err_body[:200])
+        except Exception as e:
+            log.warning("sendPhoto fallo: %s", e)
+
+    def _dispatch(self, text: str) -> tuple[str, list[dict]]:
+        """Devuelve (reply_text, chart_specs[])."""
         lowered = text.lower().strip()
         # Comandos rapidos (sin tokens del LLM)
         if lowered.startswith("/start") or lowered.startswith("/help"):
-            return HELP_TEXT
+            return HELP_TEXT, []
         if lowered.startswith("/status"):
-            return self._cmd_status()
+            return self._cmd_status(), []
         if lowered.startswith("/alerts"):
-            return self._cmd_alerts()
+            return self._cmd_alerts(), []
 
         # Mensaje libre -> agente IA
         if not self.agent or not self.agent.ready:
-            return "El agente IA no esta configurado. Usa /help para ver comandos disponibles."
+            return ("El agente IA no esta configurado. Usa /help para ver comandos disponibles.", [])
         result = self.agent.chat([{"role": "user", "content": text}])
-        return result.get("reply") or "(sin respuesta)"
+        return (result.get("reply") or "(sin respuesta)", result.get("charts") or [])
 
     def _cmd_status(self) -> str:
         snap = self.prediction_service.snapshot()
@@ -363,3 +444,75 @@ import re as _re  # noqa: E402
 
 def re_match(pattern: str, string: str) -> bool:
     return _re.match(pattern, string) is not None
+
+
+def _render_chart_png(spec: dict) -> Optional[bytes]:
+    """Renderiza un chart_spec a PNG via matplotlib. Devuelve bytes o None
+    si el spec no es valido o falla la libreria."""
+    if not isinstance(spec, dict):
+        return None
+    series = spec.get("series") or []
+    if not series:
+        return None
+    try:
+        # Backend non-interactive ('Agg') asi no requiere display
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.dates import DateFormatter
+        from datetime import datetime
+    except ImportError as e:
+        log.error("matplotlib no disponible: %s", e)
+        return None
+
+    # Estilo oscuro consistente con el dashboard
+    fig, ax = plt.subplots(figsize=(8, 4), dpi=110)
+    fig.patch.set_facecolor("#1a2630")
+    ax.set_facecolor("#243B4A")
+    ax.tick_params(colors="#a1aab0", labelsize=8)
+    for spine in ax.spines.values():
+        spine.set_color("#5b7888")
+    ax.grid(True, color="#5b7888", alpha=0.18, linewidth=0.5)
+
+    plotted = 0
+    for s in series:
+        data = s.get("data") or []
+        if not data:
+            continue
+        xs = [datetime.fromtimestamp(p[0] / 1000) for p in data]
+        ys = [p[1] for p in data]
+        linestyle = "--" if s.get("dashed") else "-"
+        ax.plot(xs, ys, linestyle=linestyle, color=s.get("color") or "#E8B830",
+                linewidth=1.6, label=s.get("name", ""))
+        plotted += 1
+
+    if plotted == 0:
+        plt.close(fig)
+        return None
+
+    # Lineas de umbral
+    th = spec.get("thresholds") or {}
+    if th.get("min") is not None:
+        ax.axhline(y=th["min"], color="#ef4444", linestyle=":", linewidth=1, alpha=0.7)
+    if th.get("max") is not None:
+        ax.axhline(y=th["max"], color="#ef4444", linestyle=":", linewidth=1, alpha=0.7)
+
+    # Titulo y labels
+    title = spec.get("title") or ""
+    if title:
+        ax.set_title(title, color="#E8B830", fontsize=11, fontweight="bold", pad=10)
+    unit = spec.get("unit") or ""
+    if unit:
+        ax.set_ylabel(unit, color="#a1aab0", fontsize=9)
+    if plotted > 1:
+        ax.legend(facecolor="#243B4A", edgecolor="#5b7888", labelcolor="#E0E5E8",
+                  loc="best", fontsize=8, framealpha=0.85)
+
+    ax.xaxis.set_major_formatter(DateFormatter("%H:%M"))
+    fig.autofmt_xdate(rotation=0, ha="center")
+    fig.tight_layout()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", facecolor=fig.get_facecolor(), dpi=110)
+    plt.close(fig)
+    return buf.getvalue()

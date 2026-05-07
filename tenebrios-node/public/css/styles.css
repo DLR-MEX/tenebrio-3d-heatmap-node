@@ -1558,6 +1558,29 @@ body.demo-mode .ai-dashboard { height: 100vh !important; }
 .ai-chat-msg strong { color: var(--ai-accent); }
 .ai-chat-msg-user strong { color: var(--ai-bg-base); font-weight: 800; }
 
+/* Charts inline en el chat (ECharts) */
+.ai-chat-chart {
+    width: 100%;
+    height: 220px;
+    margin: 8px 0 4px;
+    background: rgba(0,0,0,0.18);
+    border: 1px solid var(--ai-border);
+    border-radius: 8px;
+    overflow: hidden;
+}
+[data-theme="light"] .ai-chat-chart {
+    background: rgba(0,0,0,0.04);
+}
+.ai-chat-msg-user .ai-chat-chart {
+    background: rgba(0,0,0,0.10);
+    border-color: rgba(0,0,0,0.18);
+}
+.ai-chat-chart-error {
+    padding: 8px;
+    color: #f59e0b;
+    font-size: 0.78rem;
+}
+
 /* Tablas dentro del chat: borde sutil, header dorado, filas zebradas */
 .ai-chat-table {
     border-collapse: collapse;
