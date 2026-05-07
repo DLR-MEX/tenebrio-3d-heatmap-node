@@ -65,7 +65,20 @@ TRATAMIENTO DE SENSORES EXTERIORES (tex, hex):
 
 MODELO PREDICTIVO:
 - Dos GRU duales predicen el valor de cada sensor en +3 minutos.
-- Cuando un sensor INTERIOR sale del rango óptimo, el sistema registra una transición.
+- Cuando un sensor INTERIOR sale del rango óptimo, el sistema registra una TRANSICIÓN.
+
+LIMITACIÓN IMPORTANTE DEL ALERT LOG:
+- get_recent_alerts SOLO devuelve transiciones (cambios de estado), no muestreos.
+- Si un sensor ya estaba abnormal antes del periodo consultado y sigue abnormal,
+  transitions_to_abnormal puede ser 0 a pesar de haber alerta CONTINUA.
+- Por eso la tool también devuelve "currently_abnormal_interior_sensors": si esa
+  lista tiene elementos pero transitions=0, significa que la anomalía es
+  PERSISTENTE (lleva más tiempo del consultado).
+- En ese caso NUNCA respondas "no hubo anomalías": responde algo como
+  "no hubo nuevas transiciones en el periodo, pero h1, h2, ... siguen en
+  alerta desde antes del inicio del periodo (anomalía persistente)".
+- Lee también "interpretation_hint" si la tool lo devuelve — es una sugerencia
+  de cómo redactar la respuesta.
 
 TU ROL:
 - Responde en español, conciso y técnico pero amigable.
@@ -132,7 +145,12 @@ def _tool_schemas() -> list[dict]:
                         "group": {
                             "type": "string",
                             "enum": ["TEMP", "HUM"],
-                            "description": "Filtrar por grupo (opcional).",
+                            "description": (
+                                "Filtrar por grupo (opcional). DEBE ser exactamente "
+                                "'TEMP' o 'HUM' (en mayusculas), o omitirse. NO uses "
+                                "'interior'/'exterior' aqui — ese es el atributo zone "
+                                "de cada sensor, no un grupo."
+                            ),
                         },
                         "var": {
                             "type": "string",
@@ -394,9 +412,20 @@ class AgentService:
         hours = float(args.get("hours") or 24)
         hours = max(0.1, min(hours, 24 * 30))  # 0.1h .. 30 dias
         since_ts = time.time() - (hours * 3600)
+
+        # El LLM a veces manda valores invalidos (ej. "interior", "all").
+        # Validamos: solo aceptamos 'TEMP' o 'HUM', cualquier otra cosa = sin filtro.
+        raw_group = args.get("group")
+        group_filter = raw_group if raw_group in ("TEMP", "HUM") else None
+        var_filter = args.get("var") or None
+        # Sensor invalido = no filtramos (tolerancia)
+        if var_filter and var_filter not in ("t1", "t2", "t3", "t4", "t5", "tex",
+                                              "h1", "h2", "h3", "h4", "h5", "hex"):
+            var_filter = None
+
         rows = self.alert_log.query(
-            group_name=args.get("group"),
-            var=args.get("var"),
+            group_name=group_filter,
+            var=var_filter,
             since_ts=since_ts,
             limit=100,
         )
@@ -412,16 +441,59 @@ class AgentService:
                 "value": r["value"],
             })
         total = self.alert_log.count(
-            group_name=args.get("group"),
+            group_name=group_filter,
             new_state="abnormal",
             since_ts=since_ts,
         )
+
+        # CRITICO: el AlertLog solo registra TRANSICIONES (cambios de estado).
+        # Si un sensor estaba abnormal antes del periodo Y sigue abnormal,
+        # transitions=0 — pero eso NO significa "no hay anomalia". Por eso
+        # ademas devolvemos que sensores estan ACTUALMENTE en estado abnormal,
+        # filtrando los exteriores (tex/hex) que son informativos.
+        snap = self.prediction_service.snapshot()
+        currently_abnormal = []
+        for group_name in ("TEMP", "HUM"):
+            if group_filter and group_filter != group_name:
+                continue
+            g = (snap.get("groups") or {}).get(group_name) or {}
+            current = g.get("current") or {}
+            alerts = g.get("alerts") or {}
+            for v in (g.get("vars") or []):
+                if v in ("tex", "hex"):
+                    continue  # exteriores: no son alerta legitima
+                if var_filter and var_filter != v:
+                    continue
+                state = (alerts.get(v) or {}).get("current")
+                if state == "abnormal":
+                    currently_abnormal.append({
+                        "var": v,
+                        "group": group_name,
+                        "current_value": current.get(v),
+                    })
+
+        # Pista interpretativa: si transitions_to_abnormal=0 pero hay
+        # currently_abnormal, significa que el/los sensores YA estaban
+        # fuera de rango antes de la ventana consultada y siguen asi.
+        interpretation = ""
+        if total == 0 and currently_abnormal and len(rows) == 0:
+            sensors = ", ".join(s["var"] for s in currently_abnormal)
+            interpretation = (
+                f"NOTA: 0 transiciones en el periodo, PERO {sensors} estan "
+                "actualmente en estado abnormal. Esto significa que llevan "
+                "mas tiempo del consultado en alerta (entraron antes del "
+                "inicio del periodo y no han salido). Reportalo como anomalia "
+                "persistente, NO como 'sin anomalias'."
+            )
+
         return {
             "hours_back": hours,
             "filters": {k: args.get(k) for k in ("group", "var") if args.get(k)},
             "transitions_to_abnormal": total,
             "transitions_returned": len(formatted),
             "transitions": formatted,
+            "currently_abnormal_interior_sensors": currently_abnormal,
+            "interpretation_hint": interpretation,
         }
 
     def _tool_history(self, args: dict, predicted: bool) -> dict:
