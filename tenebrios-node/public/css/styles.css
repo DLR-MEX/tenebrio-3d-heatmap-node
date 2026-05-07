@@ -1204,6 +1204,17 @@ body.demo-mode .ai-dashboard { height: 100vh !important; }
     color: var(--ai-accent);
 }
 
+/* Preview: muestra el chat_id sanitizado debajo del input cuando el
+   usuario pegó algo distinto del numero limpio. */
+.ai-cfg-preview {
+    display: none;
+    font-size: 0.55rem;
+    color: var(--ai-accent);
+    margin: 0 0 6px;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+.ai-cfg-preview.visible { display: block; }
+
 .ai-cfg-toggle {
     flex-direction: row;
     align-items: center;
