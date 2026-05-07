@@ -354,6 +354,42 @@ export function createApp() {
   app.post('/api/predictor/telegram/test', (req, res) =>
     proxyJson('POST', '/api/telegram/test', req, res));
 
+  // --- /api/predictor/agent/chat -------------------------------------------
+  // Proxy del agente IA conversacional. Body acepta hasta 32kb (mensajes
+  // pueden incluir history). El timeout efectivo lo da el AbortController de
+  // proxyJson; lo elevamos para chat porque las queries con tool calls pueden
+  // tardar 5-15s (multiples roundtrips al LLM y a Ubidots).
+  const agentJsonParser = express.json({ limit: '32kb' });
+  app.post('/api/predictor/agent/chat', agentJsonParser, async (req, res) => {
+    // Override del timeout solo para esta ruta — chat es naturalmente lento
+    const upstreamUrl = `${AI_PREDICTOR_BASE}/api/agent/chat`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s
+    try {
+      const upstream = await fetch(upstreamUrl, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req.body || {}),
+      });
+      const text = await upstream.text();
+      res.status(upstream.status);
+      res.set('Cache-Control', 'no-store');
+      res.set('Content-Type', upstream.headers.get('content-type') || 'application/json');
+      res.send(text);
+    } catch (err) {
+      const isAbort = err.name === 'AbortError';
+      logger.warn(`agent chat: ${isAbort ? 'timeout (>30s)' : err.message}`);
+      res.status(isAbort ? 504 : 503).json({
+        error: isAbort
+          ? 'El agente tardó más de 30s en responder. Intenta una pregunta más simple.'
+          : `Agente inalcanzable: ${err.message}`,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  });
+
   // --- /api/predictor/stream ------------------------------------------------
   // Proxy SSE: pasa-through del stream del sidecar. Mantiene los eventos
   // (snapshot/update/ping) sin transformar; el cliente los consume con

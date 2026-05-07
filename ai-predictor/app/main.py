@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 
+from app.agent import AgentService
 from app.service import Config, PredictionService, setup_logging
 
 
@@ -23,19 +24,30 @@ STATIC_DIR = HERE / "static"
 INDEX_HTML = STATIC_DIR / "index.html"
 
 service: Optional[PredictionService] = None
+agent: Optional[AgentService] = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global service
+    global service, agent
     cfg = Config.load()
     setup_logging(cfg.log_level)
     service = PredictionService(cfg)
     service.attach_loop(asyncio.get_running_loop())
     service.start()
+    agent = AgentService(
+        api_key=cfg.ollama_api_key,
+        host=cfg.ollama_host,
+        model=cfg.ollama_model,
+        enabled=cfg.agent_enabled,
+        prediction_service=service,
+        alert_log=service.alert_log,
+    )
     try:
         yield
     finally:
+        if agent is not None:
+            agent.close()
         service.stop()
 
 
@@ -156,3 +168,68 @@ async def post_telegram_test():
     if not ok:
         return JSONResponse({"sent": False, "error": message}, status_code=400)
     return {"sent": True, "message": message}
+
+
+# --- Agente IA conversacional ---------------------------------------------
+# Recibe un mensaje y opcionalmente historial conversacional. Devuelve
+# la respuesta del LLM despues de invocar las tools necesarias.
+
+MAX_HISTORY = 20  # mensajes maximos en el array history
+MAX_MESSAGE_LEN = 2000
+
+
+@app.post("/api/agent/chat")
+async def post_agent_chat(request: Request):
+    if agent is None or not agent.ready:
+        return JSONResponse(
+            {
+                "error": (
+                    "Agente IA no configurado. Setea OLLAMA_API_KEY en .env "
+                    "y reinicia el sidecar."
+                ),
+            },
+            status_code=503,
+        )
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "JSON invalido"}, status_code=400)
+
+    message = (body.get("message") or "").strip()
+    history = body.get("history") or []
+    if not message:
+        return JSONResponse({"error": "campo 'message' es requerido"}, status_code=400)
+    if len(message) > MAX_MESSAGE_LEN:
+        return JSONResponse(
+            {"error": f"message excede {MAX_MESSAGE_LEN} caracteres"},
+            status_code=400,
+        )
+    if not isinstance(history, list):
+        return JSONResponse({"error": "history debe ser lista"}, status_code=400)
+    if len(history) > MAX_HISTORY:
+        history = history[-MAX_HISTORY:]
+
+    # Sanitizar history: solo dejar role/content
+    clean_history = []
+    for m in history:
+        if not isinstance(m, dict):
+            continue
+        role = m.get("role")
+        content = m.get("content")
+        if role in ("user", "assistant") and isinstance(content, str):
+            clean_history.append({"role": role, "content": content[:MAX_MESSAGE_LEN]})
+
+    # Construir mensajes para el agente: history + nueva pregunta
+    messages = clean_history + [{"role": "user", "content": message}]
+
+    # chat() es bloqueante (HTTP a Ollama), corremos en thread para no bloquear
+    # el event loop de FastAPI
+    try:
+        result = await asyncio.to_thread(agent.chat, messages)
+    except Exception as e:
+        logging.getLogger("agent").error("chat() error: %s", e)
+        return JSONResponse(
+            {"error": f"Agente fallo: {e}"},
+            status_code=502,
+        )
+    return result

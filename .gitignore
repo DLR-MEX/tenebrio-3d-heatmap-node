@@ -80,3 +80,10 @@ __pycache__/
 # Config mutable de runtime (chat_id Telegram, etc) — local a cada deploy
 ai-predictor/runtime_config.json
 runtime_config.json
+
+# AlertLog SQLite (transiciones de estado de sensores) — local
+ai-predictor/alert_log.sqlite
+ai-predictor/alert_log.sqlite-journal
+ai-predictor/alert_log.sqlite-wal
+ai-predictor/alert_log.sqlite-shm
+alert_log.sqlite*

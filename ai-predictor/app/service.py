@@ -26,6 +26,8 @@ import paho.mqtt.client as mqtt
 from dotenv import load_dotenv
 from tensorflow.keras.models import load_model
 
+from app.alert_log import AlertLog
+
 
 ROOT = Path(__file__).resolve().parent.parent
 MODELS_DIR = ROOT / "models"
@@ -124,7 +126,14 @@ class TelegramNotifier:
 
     TELEGRAM_API = "https://api.telegram.org"
 
-    def __init__(self, bot_token: str, chat_id: str, enabled: bool, cooldown_sec: float = 300.0):
+    def __init__(
+        self,
+        bot_token: str,
+        chat_id: str,
+        enabled: bool,
+        cooldown_sec: float = 300.0,
+        alert_log: Optional[AlertLog] = None,
+    ):
         self.bot_token = bot_token
         self.chat_id = chat_id
         self.enabled = bool(enabled and bot_token and chat_id)
@@ -133,6 +142,10 @@ class TelegramNotifier:
         self._prev_pred: dict[str, str] = {}  # var -> ultimo estado "predicted"
         self._last_sent: dict[tuple[str, str], float] = {}  # (var, kind) -> ts
         self._lock = threading.Lock()
+        # AlertLog persiste TODAS las transiciones (independiente del estado del
+        # notifier Telegram — incluso si Telegram esta apagado, queremos
+        # registrar las transiciones para que el agente pueda consultarlas)
+        self.alert_log = alert_log
         self.log = logging.getLogger("telegram")
         if self.enabled:
             self.log.info("Telegram notifier ACTIVO (cooldown=%.0fs)", cooldown_sec)
@@ -147,8 +160,10 @@ class TelegramNotifier:
         predicted_values: dict,
         alerts: dict,
     ) -> None:
-        if not self.enabled:
-            return
+        # AlertLog se actualiza SIEMPRE (independiente del estado del notifier
+        # Telegram), asi el agente IA puede consultar transiciones aunque
+        # Telegram este apagado. Telegram aplica cooldown adicional para
+        # limitar mensajes; AlertLog registra cada transicion sin cooldown.
         now = time.time()
         unit = GROUP_UNITS.get(group, "")
         group_label = GROUP_LABELS.get(group, group)
@@ -169,6 +184,25 @@ class TelegramNotifier:
                 prev_pred = self._prev_pred.get(var)
                 self._prev_cur[var] = cur_state
                 self._prev_pred[var] = pred_state
+
+                # Persistencia: SQLite alert log (sin cooldown, sin filtros)
+                if self.alert_log is not None:
+                    if prev_cur is not None and prev_cur != cur_state:
+                        self.alert_log.record(
+                            ts=now, group_name=group, var=var,
+                            prev_state=prev_cur, new_state=cur_state, kind="current",
+                            value=cur_val, predicted_value=pred_val,
+                        )
+                    if prev_pred is not None and prev_pred != pred_state:
+                        self.alert_log.record(
+                            ts=now, group_name=group, var=var,
+                            prev_state=prev_pred, new_state=pred_state, kind="predicted",
+                            value=cur_val, predicted_value=pred_val,
+                        )
+
+                # Telegram: solo si esta habilitado y con cooldown
+                if not self.enabled:
+                    continue
 
                 # 1) PELIGRO inmediato: actual paso a abnormal
                 if cur_state == "abnormal" and prev_cur != "abnormal":
@@ -334,6 +368,10 @@ class Config:
     telegram_bot_token: str
     telegram_chat_id: str
     telegram_cooldown_sec: float
+    agent_enabled: bool
+    ollama_api_key: str
+    ollama_host: str
+    ollama_model: str
 
     @classmethod
     def load(cls) -> "Config":
@@ -360,6 +398,10 @@ class Config:
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
             telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip(),
             telegram_cooldown_sec=float(os.getenv("TELEGRAM_COOLDOWN_SEC", "300")),
+            agent_enabled=os.getenv("AGENT_ENABLED", "true").lower() == "true",
+            ollama_api_key=os.getenv("OLLAMA_API_KEY", "").strip(),
+            ollama_host=os.getenv("OLLAMA_HOST", "https://ollama.com").strip(),
+            ollama_model=os.getenv("OLLAMA_MODEL", "gpt-oss:120b").strip(),
         )
 
     def with_runtime_overrides(self) -> "Config":
@@ -421,6 +463,31 @@ class UbidotsHTTP:
             return []
         rows = [(int(r["timestamp"]), float(r["value"])) for r in data.get("results", [])]
         rows.reverse()
+        return rows
+
+    def get_values_range(
+        self, variable_id: str, start_ms: int, end_ms: int, max_points: int = 5000
+    ) -> list[tuple[int, float]]:
+        """Devuelve (timestamp_ms, value) en el rango [start_ms, end_ms].
+        Pagina la respuesta de Ubidots; corta en max_points para no inflar
+        la memoria si el usuario pide rangos huge."""
+        rows: list[tuple[int, float]] = []
+        # Ubidots permite end y start en /values/?start=&end=&page_size=
+        page_size = min(max_points, 1000)
+        try:
+            url = (
+                f"/api/v1.6/variables/{variable_id}/values/"
+                f"?start={start_ms}&end={end_ms}&page_size={page_size}"
+            )
+            data = self._get(url)
+            for r in data.get("results", []):
+                rows.append((int(r["timestamp"]), float(r["value"])))
+                if len(rows) >= max_points:
+                    break
+        except urllib.error.HTTPError as e:
+            self.log.error("Error fetching range var=%s: %s", variable_id, e)
+            return []
+        rows.reverse()  # Ubidots devuelve descendente; queremos ascendente
         return rows
 
 
@@ -506,6 +573,10 @@ class PredictionService:
         self.temp_bucket = SampleBucket(TEMP_VARS, cfg.bucket_timeout_sec)
         self.hum_bucket = SampleBucket(HUM_VARS, cfg.bucket_timeout_sec)
 
+        # SQLite local para persistencia de transiciones de estado.
+        # Alimenta al agente IA para responder "hubo anomalias ayer?".
+        self.alert_log = AlertLog(ROOT / "alert_log.sqlite")
+
         # Aplicar runtime_config.json (cambios persistidos desde la UI)
         # encima de los valores de .env. El bot_token nunca se sobrescribe.
         effective_cfg = cfg.with_runtime_overrides()
@@ -514,6 +585,7 @@ class PredictionService:
             chat_id=effective_cfg.telegram_chat_id,
             enabled=effective_cfg.telegram_enabled,
             cooldown_sec=effective_cfg.telegram_cooldown_sec,
+            alert_log=self.alert_log,
         )
 
         # estado compartido
@@ -600,6 +672,12 @@ class PredictionService:
 
     def start(self) -> None:
         self.started_at = time.time()
+        # Limpiar registros mas viejos de 30 dias en cada arranque (no diario,
+        # pero suficiente para que el SQLite no crezca indefinidamente)
+        try:
+            self.alert_log.cleanup(older_than_days=30)
+        except Exception as e:
+            self.log.warning("AlertLog cleanup fallo: %s", e)
         if self.cfg.prefill_from_api:
             try:
                 self._prefill_buffers()
@@ -655,6 +733,10 @@ class PredictionService:
         self._stop.set()
         self.client.loop_stop()
         self.client.disconnect()
+        try:
+            self.alert_log.close()
+        except Exception:
+            pass
         self.log.info("Servicio detenido.")
 
     def update_telegram_settings(
