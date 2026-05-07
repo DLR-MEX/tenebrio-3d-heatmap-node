@@ -725,3 +725,240 @@ body.immersive #scene-container {
     .view-toggle { margin: 4px 0; }
     .view-toggle button { padding: 3px 7px; font-size: 0.5rem; }
 }
+
+/* ==================================================================
+   Modal Telegram Config — abre con boton engrane del header IA.
+   Paleta consistente con el resto de la vista IA (oscuro + dorado).
+   ================================================================== */
+
+.ai-cfg-trigger {
+    background: rgba(36,59,74,0.6);
+    color: #E8B830;
+    border: 1px solid #3a5a6a;
+    border-radius: 8px;
+    width: 28px; height: 28px;
+    cursor: pointer;
+    font-size: 0.85rem; line-height: 1;
+    display: inline-flex; align-items: center; justify-content: center;
+    transition: background 0.2s, border-color 0.2s, transform 0.2s;
+}
+.ai-cfg-trigger:hover {
+    background: #E8B830;
+    color: #1a2630;
+    border-color: #E8B830;
+    transform: rotate(45deg);
+}
+
+.ai-cfg-modal {
+    position: fixed; inset: 0;
+    background: rgba(7,8,13,0.65);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 1000;
+    padding: 20px;
+    animation: ai-cfg-fadein 0.18s ease-out;
+}
+@keyframes ai-cfg-fadein {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+.ai-cfg-card {
+    background: linear-gradient(180deg, #243B4A 0%, #1d3140 100%);
+    border: 1px solid #3a5a6a;
+    border-radius: 14px;
+    padding: 22px 22px 18px;
+    width: 100%; max-width: 460px;
+    color: #e8e0d8;
+    box-shadow: 0 18px 60px rgba(0,0,0,0.5), 0 0 0 1px rgba(232,184,48,0.10);
+    animation: ai-cfg-pop 0.22s ease-out;
+}
+@keyframes ai-cfg-pop {
+    from { transform: translateY(8px) scale(0.98); opacity: 0; }
+    to   { transform: translateY(0)   scale(1);    opacity: 1; }
+}
+
+.ai-cfg-head {
+    display: flex; align-items: center; gap: 10px;
+    border-bottom: 1px solid #3a5a6a;
+    padding-bottom: 12px;
+    margin-bottom: 14px;
+}
+.ai-cfg-head h3 {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: #E8B830;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    margin: 0;
+}
+.ai-cfg-state-badge {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 0.5rem;
+    padding: 3px 9px;
+    border-radius: 999px;
+    letter-spacing: 0.1em;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+.ai-cfg-state-badge[data-state="on"] {
+    background: rgba(52,211,153,0.14);
+    color: #86efac;
+    border: 1px solid rgba(52,211,153,0.35);
+}
+.ai-cfg-state-badge[data-state="off"] {
+    background: rgba(96,120,136,0.14);
+    color: #8aa0b0;
+    border: 1px solid #3a5a6a;
+}
+.ai-cfg-close {
+    margin-left: auto;
+    background: transparent;
+    color: #8aa0b0;
+    border: none;
+    font-size: 0.95rem;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 6px;
+    transition: background 0.15s, color 0.15s;
+}
+.ai-cfg-close:hover { background: rgba(255,255,255,0.05); color: #fff; }
+
+.ai-cfg-warn {
+    background: rgba(245,158,11,0.10);
+    border: 1px solid rgba(245,158,11,0.35);
+    color: #fbbf24;
+    padding: 9px 12px;
+    border-radius: 8px;
+    font-size: 0.6rem;
+    line-height: 1.5;
+    margin-bottom: 14px;
+}
+.ai-cfg-warn code {
+    background: rgba(0,0,0,0.25);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.95em;
+}
+
+.ai-cfg-form { display: flex; flex-direction: column; gap: 4px; }
+.ai-cfg-form.busy { opacity: 0.6; pointer-events: none; }
+
+.ai-cfg-row {
+    display: flex; flex-direction: column; gap: 5px;
+    margin-top: 8px;
+}
+.ai-cfg-label {
+    font-size: 0.55rem;
+    color: #8aa0b0;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    font-weight: 600;
+}
+.ai-cfg-row input[type="text"],
+.ai-cfg-row input[type="number"] {
+    background: #1a2630;
+    color: #e8e0d8;
+    border: 1px solid #3a5a6a;
+    border-radius: 7px;
+    padding: 8px 11px;
+    font-size: 0.7rem;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    outline: none;
+    transition: border-color 0.15s, background 0.15s;
+}
+.ai-cfg-row input[type="text"]:focus,
+.ai-cfg-row input[type="number"]:focus {
+    border-color: #E8B830;
+    background: #1f2d39;
+}
+.ai-cfg-hint {
+    font-size: 0.5rem;
+    color: #607888;
+    margin: 0 0 4px;
+    line-height: 1.5;
+}
+.ai-cfg-hint code {
+    background: rgba(0,0,0,0.25);
+    padding: 1px 4px;
+    border-radius: 3px;
+    color: #E8B830;
+}
+
+.ai-cfg-toggle {
+    flex-direction: row;
+    align-items: center;
+    gap: 9px;
+    margin-top: 14px;
+    margin-bottom: 6px;
+    cursor: pointer;
+    user-select: none;
+}
+.ai-cfg-toggle input[type="checkbox"] {
+    width: 16px; height: 16px;
+    accent-color: #E8B830;
+    cursor: pointer;
+}
+.ai-cfg-toggle span {
+    font-size: 0.65rem;
+    color: #e8e0d8;
+    font-weight: 600;
+}
+
+.ai-cfg-msg {
+    font-size: 0.55rem;
+    line-height: 1.5;
+    min-height: 14px;
+    margin-top: 10px;
+    padding: 0;
+    color: #8aa0b0;
+}
+.ai-cfg-msg.ok    { color: #86efac; }
+.ai-cfg-msg.error { color: #fca5a5; }
+.ai-cfg-msg.warn  { color: #fbbf24; }
+
+.ai-cfg-actions {
+    display: flex; align-items: center; gap: 8px;
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid #3a5a6a;
+}
+.ai-cfg-spacer { flex: 1; }
+
+.ai-cfg-btn-primary,
+.ai-cfg-btn-secondary {
+    cursor: pointer;
+    padding: 7px 14px;
+    border-radius: 7px;
+    font-size: 0.55rem;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    font-family: inherit;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.ai-cfg-btn-primary {
+    background: #E8B830;
+    color: #1a2630;
+    border: 1px solid #E8B830;
+}
+.ai-cfg-btn-primary:hover { background: #d4a428; }
+.ai-cfg-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.ai-cfg-btn-secondary {
+    background: transparent;
+    color: #8aa0b0;
+    border: 1px solid #3a5a6a;
+}
+.ai-cfg-btn-secondary:hover {
+    color: #e8e0d8;
+    border-color: #5a7a8a;
+}
+.ai-cfg-btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+@media (max-width: 640px) {
+    .ai-cfg-card { padding: 16px; max-width: 100%; }
+    .ai-cfg-actions { flex-wrap: wrap; }
+    .ai-cfg-spacer { display: none; }
+    .ai-cfg-btn-primary, .ai-cfg-btn-secondary { flex: 1; padding: 9px 8px; }
+}

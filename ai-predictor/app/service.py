@@ -72,6 +72,36 @@ def build_alerts(current: dict, predicted: dict, var_names: list[str], group: st
 GROUP_LABELS = {"TEMP": "Temperatura", "HUM": "Humedad"}
 GROUP_UNITS = {"TEMP": "°C", "HUM": "%"}
 
+# Archivo de configuracion mutable en runtime (persiste cambios hechos
+# desde la UI). Se sobrescribe sobre los valores de .env al inicio. Nunca
+# guarda secretos: el bot_token solo vive en .env.
+RUNTIME_CONFIG_PATH = ROOT / "runtime_config.json"
+RUNTIME_ALLOWED_KEYS = {"telegram_enabled", "telegram_chat_id", "telegram_cooldown_sec"}
+
+
+def load_runtime_config() -> dict:
+    """Lee runtime_config.json. Si no existe o esta corrupto, devuelve {}."""
+    if not RUNTIME_CONFIG_PATH.exists():
+        return {}
+    try:
+        data = json.loads(RUNTIME_CONFIG_PATH.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return {}
+        # Filtrar solo claves permitidas (defensa contra payloads corruptos)
+        return {k: v for k, v in data.items() if k in RUNTIME_ALLOWED_KEYS}
+    except Exception as e:
+        logging.getLogger(__name__).warning("runtime_config.json invalido: %s", e)
+        return {}
+
+
+def save_runtime_config(data: dict) -> None:
+    """Guarda solo claves permitidas. Crea el archivo si no existe."""
+    clean = {k: v for k, v in data.items() if k in RUNTIME_ALLOWED_KEYS}
+    RUNTIME_CONFIG_PATH.write_text(
+        json.dumps(clean, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
 
 log = logging.getLogger(__name__)
 
@@ -161,6 +191,73 @@ class TelegramNotifier:
     def _cooldown_ok(self, var: str, kind: str, now: float) -> bool:
         last = self._last_sent.get((var, kind))
         return last is None or (now - last) >= self.cooldown_sec
+
+    def update_settings(
+        self,
+        chat_id: Optional[str] = None,
+        enabled: Optional[bool] = None,
+        cooldown_sec: Optional[float] = None,
+    ) -> dict:
+        """Hot-reload de la config sin reiniciar el servicio.
+        El bot_token NO se acepta aqui — solo se cambia desde .env."""
+        with self._lock:
+            if chat_id is not None:
+                self.chat_id = chat_id.strip()
+            if cooldown_sec is not None:
+                self.cooldown_sec = float(cooldown_sec)
+            if enabled is not None:
+                # enabled solo es efectivo si tenemos token y chat_id
+                self.enabled = bool(enabled and self.bot_token and self.chat_id)
+            else:
+                # Si solo cambio chat_id, recalcular enabled
+                self.enabled = bool(self.enabled and self.bot_token and self.chat_id)
+            self.log.info(
+                "Telegram config actualizada: enabled=%s chat_id=%s cooldown=%.0fs",
+                self.enabled, "***" if self.chat_id else "(vacio)", self.cooldown_sec,
+            )
+            return self.snapshot()
+
+    def snapshot(self) -> dict:
+        """Estado publicable. Nunca expone el bot_token, solo si esta configurado."""
+        return {
+            "enabled": self.enabled,
+            "chat_id": self.chat_id or "",
+            "cooldown_sec": self.cooldown_sec,
+            "token_configured": bool(self.bot_token),
+        }
+
+    def send_test_message(self) -> tuple[bool, str]:
+        """Manda un mensaje de prueba sincronicamente. Devuelve (ok, mensaje)."""
+        if not self.bot_token:
+            return False, "TELEGRAM_BOT_TOKEN no configurado en .env"
+        if not self.chat_id:
+            return False, "chat_id no configurado"
+        try:
+            # Send sincrono para que la UI sepa si funciono
+            url = f"{self.TELEGRAM_API}/bot{self.bot_token}/sendMessage"
+            body = json.dumps({
+                "chat_id": self.chat_id,
+                "text": "✨ *Test* — Tenebris AI Sentinel funcionando.\nEste mensaje confirma que el bot puede escribir en este chat.",
+                "parse_mode": "Markdown",
+                "disable_web_page_preview": True,
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                url, data=body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=8) as r:
+                if getattr(r, "status", 200) >= 300:
+                    return False, f"Telegram respondio status={r.status}"
+            return True, "Mensaje enviado"
+        except urllib.error.HTTPError as e:
+            try:
+                err_body = e.read().decode("utf-8", errors="replace")
+            except Exception:
+                err_body = ""
+            return False, f"HTTP {e.code}: {err_body[:200]}"
+        except Exception as e:
+            return False, f"Error: {e}"
 
     @staticmethod
     def _fmt_danger(group_label: str, var: str, value, lo: float, hi: float, unit: str) -> str:
@@ -263,6 +360,21 @@ class Config:
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
             telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip(),
             telegram_cooldown_sec=float(os.getenv("TELEGRAM_COOLDOWN_SEC", "300")),
+        )
+
+    def with_runtime_overrides(self) -> "Config":
+        """Devuelve una copia con runtime_config.json sobrepuesto al .env.
+        Solo se sobrescriben claves seguras (nunca el bot_token)."""
+        rt = load_runtime_config()
+        if not rt:
+            return self
+        return Config(
+            **{
+                **self.__dict__,
+                "telegram_enabled": bool(rt.get("telegram_enabled", self.telegram_enabled)),
+                "telegram_chat_id": str(rt.get("telegram_chat_id", self.telegram_chat_id)),
+                "telegram_cooldown_sec": float(rt.get("telegram_cooldown_sec", self.telegram_cooldown_sec)),
+            }
         )
 
 
@@ -394,11 +506,14 @@ class PredictionService:
         self.temp_bucket = SampleBucket(TEMP_VARS, cfg.bucket_timeout_sec)
         self.hum_bucket = SampleBucket(HUM_VARS, cfg.bucket_timeout_sec)
 
+        # Aplicar runtime_config.json (cambios persistidos desde la UI)
+        # encima de los valores de .env. El bot_token nunca se sobrescribe.
+        effective_cfg = cfg.with_runtime_overrides()
         self.telegram = TelegramNotifier(
-            bot_token=cfg.telegram_bot_token,
-            chat_id=cfg.telegram_chat_id,
-            enabled=cfg.telegram_enabled,
-            cooldown_sec=cfg.telegram_cooldown_sec,
+            bot_token=cfg.telegram_bot_token,  # siempre del .env
+            chat_id=effective_cfg.telegram_chat_id,
+            enabled=effective_cfg.telegram_enabled,
+            cooldown_sec=effective_cfg.telegram_cooldown_sec,
         )
 
         # estado compartido
@@ -503,6 +618,28 @@ class PredictionService:
         self.client.loop_stop()
         self.client.disconnect()
         self.log.info("Servicio detenido.")
+
+    def update_telegram_settings(
+        self,
+        chat_id: Optional[str] = None,
+        enabled: Optional[bool] = None,
+        cooldown_sec: Optional[float] = None,
+    ) -> dict:
+        """Actualiza el notifier en memoria Y persiste a runtime_config.json."""
+        snap = self.telegram.update_settings(
+            chat_id=chat_id, enabled=enabled, cooldown_sec=cooldown_sec,
+        )
+        # Persistir lo que el notifier acepto (no necesariamente lo que se pidio,
+        # ej. enabled puede quedar false si no hay token o chat_id).
+        try:
+            save_runtime_config({
+                "telegram_chat_id": self.telegram.chat_id,
+                "telegram_enabled": self.telegram.enabled,
+                "telegram_cooldown_sec": self.telegram.cooldown_sec,
+            })
+        except Exception as e:
+            self.log.warning("No se pudo guardar runtime_config.json: %s", e)
+        return snap
 
     def run_blocking(self) -> None:
         """Para uso desde CLI: arranca y bloquea hasta stop()."""

@@ -179,6 +179,27 @@ El sidecar Python puede enviar alertas a un chat de Telegram cuando un sensor ca
 - El send va en thread daemon → no bloquea el procesamiento MQTT
 - Si Telegram está caído o tarda, ese mensaje se pierde (timeout 5s) — el siguiente intento será en la siguiente transición
 
+### Configuración desde el dashboard (sin reiniciar)
+
+En el header de la vista IA hay un **botón ⚙** que abre un modal donde se puede:
+- Cambiar el `chat_id` (ej. al rotar a un grupo distinto)
+- Activar/desactivar las notificaciones
+- Ajustar `cooldown_sec` (30–3600)
+- Mandar un **mensaje de prueba** para verificar que el bot puede escribir al chat
+
+Los cambios se aplican al instante (hot-reload) y se persisten en `ai-predictor/runtime_config.json` (gitignored). Al reiniciar el sidecar:
+1. Carga `.env` (token + valores por defecto)
+2. Sobrescribe con `runtime_config.json` (lo último guardado desde la UI)
+
+**Importante (seguridad):** la UI **nunca** pide ni muestra el `TELEGRAM_BOT_TOKEN`. El token vive solo en `.env`. Si se intenta enviar `bot_token` por la API (`POST /api/telegram`), el backend devuelve 400. Si el modal detecta que no hay token configurado, muestra un aviso amarillo pidiendo editar `.env`.
+
+**Endpoints expuestos:**
+| Método | Path | Qué hace |
+|---|---|---|
+| GET | `/api/predictor/telegram` | Devuelve `{enabled, chat_id, cooldown_sec, token_configured}` (sin token) |
+| POST | `/api/predictor/telegram` | Acepta `{chat_id?, enabled?, cooldown_sec?}`. Persiste a `runtime_config.json` |
+| POST | `/api/predictor/telegram/test` | Manda un mensaje de prueba al chat configurado |
+
 ## Seguridad
 
 - ✅ Sidecar Python solo escucha en `127.0.0.1:8000`
