@@ -8,15 +8,36 @@ const STORAGE_KEY = 'ai-chat-history-v1';
 const MAX_HISTORY = 30;
 const REQUEST_TIMEOUT_MS = 95000;
 
-const EMPTY_HTML = `
-    <div class="ai-chat-empty">
-        <strong>👋 ¡Hola!</strong> Soy Tenebris AI Sentinel.<br>
-        Pregúntame en español sobre el cuarto:<br>
-        <em>¿cómo está la temperatura?</em><br>
-        <em>¿hubo anomalías hoy?</em><br>
-        <em>promedio de t1 en las últimas 6 horas</em>
-    </div>
-`;
+// Sugerencias para la primera interaccion. Cada chip dispara la pregunta
+// como si el usuario la hubiera tipeado y enviado.
+const SUGGESTED_PROMPTS = [
+    { icon: '🌡', text: '¿Cómo está el cuarto ahora?' },
+    { icon: '🚨', text: '¿Hubo anomalías hoy?' },
+    { icon: '📈', text: 'Gráfica de temperaturas últimas 6 horas' },
+    { icon: '💧', text: '¿Desde cuándo está mal la humedad?' },
+    { icon: '🔥', text: '¿Cómo está el termo y el calentador?' },
+    { icon: '🌬', text: '¿Cómo está la calidad del aire?' },
+];
+
+function buildEmptyHTML() {
+    const chips = SUGGESTED_PROMPTS.map((p, i) => `
+        <button type="button" class="ai-chat-suggestion" data-suggestion-idx="${i}">
+            <span class="ai-chat-suggestion-icon">${p.icon}</span>
+            <span class="ai-chat-suggestion-text">${escapeHTML(p.text)}</span>
+        </button>
+    `).join('');
+    return `
+        <div class="ai-chat-empty">
+            <strong>👋 ¡Hola!</strong> Soy Tenebris AI Sentinel.<br>
+            Pregúntame algo o elige una sugerencia:
+        </div>
+        <div class="ai-chat-suggestions">${chips}</div>
+    `;
+}
+
+function escapeHTML(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
 
 let panelEl, fabEl, msgsEl, formEl, inputEl, sendBtn, statusEl;
 let history = [];
@@ -40,6 +61,18 @@ export function initChat() {
     formEl?.addEventListener('submit', onSubmit);
     inputEl?.addEventListener('keydown', onKeyDown);
     inputEl?.addEventListener('input', autosize);
+
+    // Delegado: click en cualquier chip de sugerencia inyecta la pregunta
+    // y la envia inmediatamente (sin que el usuario tenga que dar Enter).
+    msgsEl?.addEventListener('click', (e) => {
+        const chip = e.target.closest('.ai-chat-suggestion');
+        if (!chip || busy) return;
+        const idx = Number(chip.dataset.suggestionIdx);
+        const prompt = SUGGESTED_PROMPTS[idx];
+        if (!prompt) return;
+        if (inputEl) inputEl.value = prompt.text;
+        formEl?.requestSubmit();
+    });
 
     history = loadHistory();
     render();
@@ -122,7 +155,7 @@ function setStatus(text, state) {
 function render() {
     if (!msgsEl) return;
     if (history.length === 0) {
-        msgsEl.innerHTML = EMPTY_HTML;
+        msgsEl.innerHTML = buildEmptyHTML();
         return;
     }
     msgsEl.innerHTML = '';
@@ -346,7 +379,9 @@ async function onSubmit(e) {
     const userMsg = { role: 'user', content: text };
     history.push(userMsg);
     saveHistory();
-    if (msgsEl.querySelector('.ai-chat-empty')) msgsEl.innerHTML = '';
+    if (msgsEl.querySelector('.ai-chat-empty') || msgsEl.querySelector('.ai-chat-suggestions')) {
+        msgsEl.innerHTML = '';
+    }
     appendMessage(userMsg);
 
     inputEl.value = '';
