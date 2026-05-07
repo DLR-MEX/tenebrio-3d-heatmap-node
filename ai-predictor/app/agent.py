@@ -277,6 +277,58 @@ class AgentService:
                 pass
             self._client = None
 
+    def _post_with_retries(self, messages: list[dict], tools: list, loop_idx: int) -> Optional[dict]:
+        """POST a /api/chat con reintentos en errores 5xx (Ollama transitorio).
+        Devuelve el JSON parseado, o None si tras 3 intentos sigue 5xx."""
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            try:
+                resp = self._client.post(
+                    "/api/chat",
+                    json={
+                        "model": self.model,
+                        "messages": messages,
+                        "tools": tools,
+                        "stream": False,
+                    },
+                )
+                resp.raise_for_status()
+                return resp.json()
+            except httpx.HTTPStatusError as e:
+                status = e.response.status_code if e.response is not None else 0
+                body = e.response.text[:500] if e.response is not None else ""
+                if status >= 500 and attempt < max_attempts - 1:
+                    # Backoff exponencial: 1.5s, 3s
+                    delay = 1.5 * (2 ** attempt)
+                    log.warning(
+                        "Ollama Cloud HTTP %s en loop=%d intento=%d (de %d), retry en %.1fs",
+                        status, loop_idx, attempt + 1, max_attempts, delay,
+                    )
+                    time.sleep(delay)
+                    continue
+                log.error(
+                    "Ollama Cloud HTTP %s en loop=%d (intento final): %s",
+                    status, loop_idx, body,
+                )
+                if status >= 500:
+                    return None  # damos por perdido — caller decide que hacer
+                # 4xx: error terminal (auth, formato, etc.) — propagamos
+                raise RuntimeError(f"Ollama Cloud devolvio HTTP {status}") from e
+            except (httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError) as e:
+                # Errores de red transitorios: misma estrategia de retry
+                if attempt < max_attempts - 1:
+                    delay = 1.5 * (2 ** attempt)
+                    log.warning("Error red Ollama loop=%d intento=%d: %s, retry en %.1fs",
+                                loop_idx, attempt + 1, e, delay)
+                    time.sleep(delay)
+                    continue
+                log.error("Error red Ollama loop=%d (intento final): %s", loop_idx, e)
+                return None
+            except Exception as e:
+                log.error("Error inesperado en chat() loop=%d: %s", loop_idx, e)
+                raise
+        return None
+
     def chat(self, messages: list[dict]) -> dict:
         """
         messages: lista [{"role": "user"|"assistant"|"system", "content": str}].
@@ -294,25 +346,32 @@ class AgentService:
         tools = _tool_schemas()
 
         for loop_idx in range(self.MAX_TOOL_LOOPS):
-            try:
-                resp = self._client.post(
-                    "/api/chat",
-                    json={
-                        "model": self.model,
-                        "messages": messages,
-                        "tools": tools,
-                        "stream": False,
-                    },
-                )
-                resp.raise_for_status()
-                response = resp.json()
-            except httpx.HTTPStatusError as e:
-                body = e.response.text[:500] if e.response is not None else ""
-                log.error("Ollama Cloud HTTP %s en loop=%d: %s", e.response.status_code, loop_idx, body)
-                raise RuntimeError(f"Ollama Cloud devolvio HTTP {e.response.status_code}") from e
-            except Exception as e:
-                log.error("Error en chat() loop=%d: %s", loop_idx, e)
-                raise
+            response = self._post_with_retries(messages, tools, loop_idx)
+            if response is None:
+                # Despues de N reintentos Ollama sigue 5xx. Devolvemos una
+                # respuesta amigable en lugar de explotar — preservando los
+                # tool_calls ejecutados hasta ahora.
+                partial = ""
+                # Si el assistant ya empezo a redactar (por algun loop previo),
+                # devolvemos eso. Si no, mensaje generico.
+                for m in reversed(messages):
+                    if m.get("role") == "assistant" and m.get("content"):
+                        partial = m["content"]
+                        break
+                return {
+                    "reply": (
+                        partial + "\n\n_(Ollama Cloud tuvo un error temporal; "
+                        "esta es una respuesta parcial. Intenta repetir la "
+                        "pregunta en unos segundos.)_"
+                        if partial
+                        else "Ollama Cloud está respondiendo con errores 5xx en este "
+                        "momento (problema del provider, no de tu pregunta). Intenta "
+                        "de nuevo en unos segundos."
+                    ),
+                    "tool_calls": tool_calls_summary,
+                    "model": self.model,
+                    "error": "ollama_5xx",
+                }
 
             msg = response.get("message") or {}
             # Anexar la respuesta del assistant a la conversacion
