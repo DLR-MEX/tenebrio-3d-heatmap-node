@@ -7,6 +7,7 @@ import { buildCards, updateCard, resizeSparks } from './cards.js';
 import { initMainChart, refreshMainChart, resizeMainCharts } from './charts.js';
 import { connectStream, disconnectStream } from './sse.js';
 import { initTelegramConfig } from './telegram_config.js';
+import { initAlertSound } from './alert_sound.js';
 
 const TEMP_VARS = ['t1', 't2', 't3', 't4', 't5', 'tex'];
 const HUM_VARS  = ['h1', 'h2', 'h3', 'h4', 'h5', 'hex'];
@@ -33,6 +34,7 @@ export function initPredictorView() {
     initMainChart('TEMP', TEMP_VARS, TEMP_HUES, '°');
     initMainChart('HUM',  HUM_VARS,  HUM_HUES,  '%');
     initTelegramConfig();
+    initAlertSound();
 
     window.addEventListener('resize', () => {
         // Solo redibujamos si la vista esta visible; ECharts en contenedor

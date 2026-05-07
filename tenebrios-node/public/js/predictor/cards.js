@@ -2,6 +2,8 @@
 // y mini-sparkline con historial reciente. Portado de app/static/app.js
 // del proyecto Modelos_Tenebrios, adaptado a la paleta de Danny.
 
+import { playDanger } from './alert_sound.js';
+
 const fmt = (n, d = 2) => Number.isFinite(n) ? n.toFixed(d) : '—';
 
 // Almacen de instancias ECharts por sensor (para no recrearlas cada update)
@@ -65,8 +67,19 @@ export function updateCard(group, vars, idx, current, predicted, alerts, history
     // Estado: marca card y valor segun la clasificacion del backend.
     // - data-cur-state: estado actual (red border si abnormal hoy)
     // - data-pred-state: estado +3min (red en valor predicho si va a ser abnormal)
+    const prevCurState = card.dataset.curState;
     card.dataset.curState = a.current;
     card.dataset.predState = a.predicted;
+
+    // Si el sensor TRANSITA a PELIGRO (no estaba abnormal antes), suena.
+    // Excluye el primer frame post-loading (prevCurState undefined o '')
+    // para no disparar sonido al cargar la pagina con sensores ya en alerta.
+    if (
+        a.current === 'abnormal' &&
+        prevCurState && prevCurState !== 'abnormal' && prevCurState !== 'unknown'
+    ) {
+        playDanger();
+    }
 
     // Pill de texto debajo del valor predicho. Las cuatro variantes:
     //   - PELIGRO        (rojo)    : valor actual fuera de rango
