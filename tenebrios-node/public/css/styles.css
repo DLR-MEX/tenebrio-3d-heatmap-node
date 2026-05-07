@@ -459,6 +459,24 @@ body.immersive #scene-container {
 /* Utilidad: oculta vista cuando inactiva */
 .hidden { display: none !important; }
 
+/* Fade cruzado entre vistas 3D ↔ IA. Se aplica a .dashboard y .ai-dashboard
+   por igual (ambos son contenedores raiz de vista). La logica del toggle
+   en app.js agrega view-fading-out por VIEW_FADE_MS, luego hace swap y
+   pone view-fading-in por un frame para que la entrante arranque opaca. */
+.dashboard, .ai-dashboard {
+    transition: opacity 280ms ease, transform 280ms ease;
+}
+.view-fading-out {
+    opacity: 0 !important;
+    transform: translateY(2px);
+    pointer-events: none;
+}
+.view-fading-in {
+    opacity: 0;
+    transform: translateY(-2px);
+    pointer-events: none;
+}
+
 /* Contenedor raíz vista IA — ocupa el mismo espacio que .dashboard */
 .ai-dashboard {
     flex: 1;
