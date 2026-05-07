@@ -300,11 +300,15 @@ export function createApp() {
     });
   });
 
-  // Helper: proxy JSON simple hacia el sidecar Python. Centraliza el manejo
-  // de errores (sidecar caido -> 503, no se rompe la UI 3D).
+  // Helper: proxy JSON simple hacia el sidecar Python. Timeout de 6s para
+  // que si Python esta caido o muy lento, el frontend reciba 504 con un
+  // mensaje claro en vez de quedar pegado.
+  const PROXY_TIMEOUT_MS = 6000;
   async function proxyJson(method, path, req, res) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), PROXY_TIMEOUT_MS);
     try {
-      const init = { method };
+      const init = { method, signal: controller.signal };
       if (method === 'POST') {
         init.headers = { 'Content-Type': 'application/json' };
         init.body = JSON.stringify(req.body || {});
@@ -316,8 +320,15 @@ export function createApp() {
       res.set('Content-Type', upstream.headers.get('content-type') || 'application/json');
       res.send(text);
     } catch (err) {
-      logger.warn(`predictor ${method} ${path} unreachable: ${err.message}`);
-      res.status(503).json({ error: 'predictor offline' });
+      const isAbort = err.name === 'AbortError';
+      const status = isAbort ? 504 : 503;
+      const reason = isAbort
+        ? `timeout (>${PROXY_TIMEOUT_MS}ms) hablando con ${AI_PREDICTOR_BASE}${path}`
+        : `${AI_PREDICTOR_BASE}${path} inalcanzable: ${err.message}`;
+      logger.warn(`predictor ${method} ${path}: ${reason}`);
+      res.status(status).json({ error: reason });
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 

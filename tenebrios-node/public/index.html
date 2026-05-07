@@ -261,12 +261,14 @@
                     <label class="ai-cfg-row">
                         <span class="ai-cfg-label">Chat ID</span>
                         <input type="text" id="ai-cfg-chatid" inputmode="numeric"
-                               placeholder="123456789 (positivo) o -100123… (grupo)"
+                               placeholder="ej. 123456789  o  -1001234567890 (grupo)"
                                autocomplete="off" />
                     </label>
+                    <p id="ai-cfg-chatid-preview" class="ai-cfg-preview"></p>
                     <p class="ai-cfg-hint">
                         Para chat privado: busca <code>@userinfobot</code> en Telegram.
-                        Para grupo: añade <code>@RawDataBot</code> al grupo y mira el campo <code>chat.id</code>.
+                        Para grupo: añade <code>@RawDataBot</code> al grupo y mira <code>chat.id</code>.
+                        Puedes pegar el texto completo — extraemos el número automáticamente.
                     </p>
 
                     <label class="ai-cfg-row">

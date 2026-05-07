@@ -36,6 +36,43 @@ export function initTelegramConfig() {
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape' && opened) closeModal();
     });
+
+    // Live sanitize del chat_id: si el usuario pega "Id: -1001234567890",
+    // o "@userinfobot dice 123456789", extraemos automaticamente el numero.
+    const chatInput = document.getElementById('ai-cfg-chatid');
+    if (chatInput) {
+        chatInput.addEventListener('input', () => {
+            const cleaned = sanitizeChatId(chatInput.value);
+            const preview = document.getElementById('ai-cfg-chatid-preview');
+            if (preview) {
+                if (cleaned && cleaned !== chatInput.value.trim()) {
+                    preview.textContent = `Se guardará como: ${cleaned}`;
+                    preview.classList.add('visible');
+                } else {
+                    preview.classList.remove('visible');
+                    preview.textContent = '';
+                }
+            }
+        });
+    }
+}
+
+// Extrae chat_id valido (entero opt. negativo) del input. Tolera prefijos
+// como "Id:", "id ", "chat_id =", espacios, separadores de miles, etc.
+// Si no encuentra un numero valido, devuelve ''.
+function sanitizeChatId(raw) {
+    if (!raw) return '';
+    // Buscamos el primer "candidato": opcional minus, seguido de digitos.
+    // Permitimos separadores comunes (`,` `.` ` `) entre digitos y los borramos.
+    const match = String(raw).match(/-?[\d][\d\s.,_]*/);
+    if (!match) return '';
+    // Quitamos los separadores no-digito (excepto el minus inicial)
+    let s = match[0].replace(/[\s.,_]/g, '');
+    // Aseguramos que el minus quede solo al inicio
+    const negative = s.startsWith('-');
+    s = s.replace(/-/g, '');
+    if (negative) s = '-' + s;
+    return s;
 }
 
 async function openModal() {
@@ -87,13 +124,23 @@ function applyToForm(data) {
 
 async function onSave(e) {
     e.preventDefault();
-    const chat = (document.getElementById('ai-cfg-chatid')?.value || '').trim();
+    const chatRaw = (document.getElementById('ai-cfg-chatid')?.value || '').trim();
+    // Sanitize: extrae numero del input aunque venga con "Id:", separadores, etc.
+    const chat = sanitizeChatId(chatRaw);
+    // Reflejar el valor sanitizado en el input para que el usuario vea exactamente
+    // que se guardo (en caso de que pegara basura)
+    if (chatRaw && chat) {
+        const input = document.getElementById('ai-cfg-chatid');
+        if (input) input.value = chat;
+    }
+
     const enabled = document.getElementById('ai-cfg-enabled')?.checked || false;
     const cooldownStr = document.getElementById('ai-cfg-cooldown')?.value || '300';
     const cooldown = parseFloat(cooldownStr);
 
-    if (chat && !/^-?\d+$/.test(chat)) {
-        setMessage('chat_id debe ser un numero entero (positivo o negativo).', 'error');
+    // Validacion: si el usuario escribio algo pero sanitize devolvio vacio, error
+    if (chatRaw && !chat) {
+        setMessage(`No se pudo extraer un chat_id numerico de "${chatRaw}". Esperado: solo digitos, opcional minus inicial. Ej. 123456789 o -1001234567890.`, 'error');
         return;
     }
     if (!Number.isFinite(cooldown) || cooldown < 30 || cooldown > 3600) {
@@ -103,15 +150,29 @@ async function onSave(e) {
 
     setBusy(true);
     setMessage('Guardando...', null);
+
+    const payload = { chat_id: chat, enabled, cooldown_sec: cooldown };
+    // Diagnostico en consola para que F12 muestre exactamente que mandamos
+    console.log('[telegram-cfg] POST', API.post, payload);
+
     try {
         const r = await fetch(API.post, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ chat_id: chat, enabled, cooldown_sec: cooldown }),
+            body: JSON.stringify(payload),
         });
-        const data = await r.json();
+        // Leemos el body como texto primero, asi vemos contenido aunque no sea JSON
+        const text = await r.text();
+        let data = null;
+        try { data = text ? JSON.parse(text) : null; } catch { /* respuesta no es JSON */ }
+        console.log('[telegram-cfg] response', r.status, data ?? text);
+
         if (!r.ok) {
-            throw new Error(data.error || `HTTP ${r.status}`);
+            const apiErr = data?.error || data?.detail || (text ? text.slice(0, 200) : '');
+            throw new Error(apiErr ? `${apiErr} (HTTP ${r.status})` : `HTTP ${r.status}`);
+        }
+        if (!data) {
+            throw new Error('Respuesta vacia del servidor');
         }
         applyToForm(data);
         // Si el usuario marco enabled pero no hay token o chat_id, el backend
@@ -122,7 +183,7 @@ async function onSave(e) {
             setMessage(data.enabled ? 'Configuracion guardada. Notificaciones ACTIVAS.' : 'Configuracion guardada (notificaciones inactivas).', 'ok');
         }
     } catch (err) {
-        setMessage(`Error: ${err.message}`, 'error');
+        setMessage(`Error al guardar: ${err.message}`, 'error');
     } finally {
         setBusy(false);
     }
