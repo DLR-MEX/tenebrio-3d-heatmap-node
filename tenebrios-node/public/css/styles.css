@@ -1067,6 +1067,62 @@ body.demo-mode .ai-dashboard { height: 100vh !important; }
     border-color: var(--ai-border);
 }
 
+/* Pills de estado en light mode: los tonos pastel (#86efac, #fbbf24,
+   #fecaca) son ilegibles sobre fondos claros. Usamos versiones
+   oscuras saturadas que mantienen contraste WCAG AA. */
+.ai-dashboard[data-theme="light"] .ai-sensor-status.normal {
+    background: rgba(22,163,74,0.14);
+    color: #166534;            /* verde oscuro */
+    border-color: rgba(22,163,74,0.45);
+}
+.ai-dashboard[data-theme="light"] .ai-sensor-status.warn {
+    background: rgba(245,158,11,0.18);
+    color: #92400e;            /* ambar oscuro */
+    border-color: rgba(245,158,11,0.55);
+}
+.ai-dashboard[data-theme="light"] .ai-sensor-status.danger {
+    background: rgba(239,68,68,0.18);
+    color: #991b1b;            /* rojo oscuro */
+    border-color: rgba(239,68,68,0.65);
+    text-shadow: none;         /* el glow rojo del dark mode no aplica */
+}
+@media (prefers-reduced-motion: no-preference) {
+    /* Mantenemos animacion danger en light pero con bg claros */
+    .ai-dashboard[data-theme="light"] .ai-sensor-status.danger {
+        animation: ai-pulse-danger-light 1.4s ease-in-out infinite;
+    }
+}
+@keyframes ai-pulse-danger-light {
+    0%, 100% { box-shadow: 0 0 0 0    rgba(239,68,68,0.0); background: rgba(239,68,68,0.18); }
+    50%      { box-shadow: 0 0 0 10px rgba(239,68,68,0.0); background: rgba(239,68,68,0.32); }
+}
+
+/* Banner de seccion en light mode */
+.ai-dashboard[data-theme="light"] .ai-alert-banner.danger {
+    background: linear-gradient(90deg, rgba(239,68,68,0.18), rgba(239,68,68,0.06));
+    color: #991b1b;
+    border-color: rgba(239,68,68,0.55);
+}
+.ai-dashboard[data-theme="light"] .ai-alert-banner.warn {
+    background: linear-gradient(90deg, rgba(245,158,11,0.20), rgba(245,158,11,0.06));
+    color: #92400e;
+    border-color: rgba(245,158,11,0.55);
+}
+
+/* Card en peligro: el valor tambien hay que oscurecerlo */
+.ai-dashboard[data-theme="light"] .ai-sensor[data-cur-state="abnormal"] .ai-sensor-value {
+    color: #991b1b;
+    text-shadow: none;
+}
+.ai-dashboard[data-theme="light"] .ai-sensor[data-cur-state="abnormal"] .ai-sensor-label {
+    color: #b91c1c;
+}
+/* Reducir el tinte rojo del fondo de la card en light para que el texto
+   oscuro siga siendo legible (en dark el bg es transparente sobre azul) */
+.ai-dashboard[data-theme="light"] .ai-sensor[data-cur-state="abnormal"] {
+    background: linear-gradient(180deg, rgba(239,68,68,0.10) 0%, rgba(239,68,68,0.04) 100%) !important;
+}
+
 .ai-cfg-modal {
     position: fixed; inset: 0;
     background: rgba(7,8,13,0.65);
@@ -1302,22 +1358,20 @@ body.demo-mode .ai-dashboard { height: 100vh !important; }
     position: fixed;
     right: 20px; bottom: 20px;
     z-index: 50;
-    display: flex; align-items: center; gap: 8px;
-    padding: 12px 18px;
+    display: flex; align-items: center; justify-content: center;
+    width: 56px; height: 56px;
     background: var(--ai-accent);
     color: var(--ai-bg-base);
-    border: none; border-radius: 999px;
-    font-size: 0.95rem; font-weight: 700;
+    border: none; border-radius: 50%;
     cursor: pointer;
     box-shadow: 0 6px 20px rgba(0,0,0,0.45), 0 0 0 4px rgba(232,184,48,0.18);
     transition: transform 0.18s ease, box-shadow 0.18s ease;
 }
 .ai-chat-fab:hover {
-    transform: translateY(-2px) scale(1.03);
+    transform: translateY(-2px) scale(1.06);
     box-shadow: 0 10px 26px rgba(0,0,0,0.5), 0 0 0 5px rgba(232,184,48,0.28);
 }
-.ai-chat-fab-icon { font-size: 1.2rem; line-height: 1; }
-.ai-chat-fab-label { letter-spacing: 0.04em; }
+.ai-chat-fab-icon { font-size: 1.5rem; line-height: 1; }
 .ai-chat-fab.hidden { display: none; }
 
 .ai-chat-panel {
@@ -1510,8 +1564,6 @@ body.demo-mode .ai-dashboard { height: 100vh !important; }
         right: 8px; left: 8px; bottom: 8px;
         width: auto; height: 80vh;
     }
-    .ai-chat-fab-label { display: none; }
-    .ai-chat-fab { padding: 14px; }
 }
 
 /* Light mode */
