@@ -1,8 +1,8 @@
 [project]
-name = "demo01"
+name = "tenebris-ai-sentinel"
 version = "0.1.0"
-description = "Add your description here"
-readme = "README.md"
+description = "Servicio de prediccion en tiempo real (GRU dual) para cuarto de cria de tenebrios."
+readme = "README_AI.md"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi[standard]>=0.135.3",
@@ -21,3 +21,12 @@ dependencies = [
     "sse-starlette>=3.3.4",
     "tensorflow>=2.21.0",
 ]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+# Empaquetar SOLO el modulo `app`. La carpeta `models/` contiene assets
+# binarios (.keras, .save) que viajan via runtime via Path, no como package.
+[tool.setuptools]
+packages = ["app"]

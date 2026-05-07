@@ -603,6 +603,10 @@ class PredictionService:
         if self.cfg.prefill_from_api:
             try:
                 self._prefill_buffers()
+                # Tras llenar buffers con datos historicos, generar UNA prediccion
+                # inicial por grupo asi el dashboard muestra datos al instante en
+                # vez de quedarse en skeletons hasta que llegue el primer MQTT.
+                self._emit_initial_predictions()
             except Exception as e:
                 self.log.warning("Prefill fallo (%s); continuando sin precarga", e)
         self.log.info(
@@ -612,6 +616,40 @@ class PredictionService:
         )
         self.client.connect(self.cfg.broker, self.cfg.port, keepalive=60)
         self.client.loop_start()
+
+    def _emit_initial_predictions(self) -> None:
+        """Genera prediccion sintetica tras prefill para que el snapshot
+        inicial del SSE ya traiga datos. No publica a Ubidots ni dispara
+        alertas Telegram (esas SOLO en transiciones reales)."""
+        for group, predictor in [("TEMP", self.temp_predictor), ("HUM", self.hum_predictor)]:
+            if len(predictor.window) < LOOK_BACK:
+                self.log.info("[%s] sin prefill suficiente (%d/%d), no emitir inicial",
+                              group, len(predictor.window), LOOK_BACK)
+                continue
+            try:
+                result = predictor._predict()
+            except Exception as e:
+                self.log.warning("[%s] prediccion inicial fallo: %s", group, e)
+                continue
+            ts = time.time()
+            alerts = build_alerts(result["current"], result["predicted"], predictor.var_names, group)
+            with self._state_lock:
+                self.latest[group]["current"] = result["current"]
+                self.latest[group]["predicted"] = result["predicted"]
+                self.latest[group]["alerts"] = alerts
+                self.latest[group]["ts"] = ts
+                self.history[group].append({
+                    "ts": ts,
+                    "current": result["current"],
+                    "predicted": result["predicted"],
+                    "alerts": alerts,
+                })
+            self.log.info("[%s] prediccion inicial emitida (snapshot listo para el dashboard)", group)
+            # Tambien sembramos el estado previo del notifier asi una sensor
+            # ya en abnormal al arranque NO dispara Telegram (no es transicion)
+            for var in predictor.var_names:
+                self.telegram._prev_cur[var] = alerts[var]["current"]
+                self.telegram._prev_pred[var] = alerts[var]["predicted"]
 
     def stop(self) -> None:
         self._stop.set()
