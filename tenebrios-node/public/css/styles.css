@@ -1488,6 +1488,56 @@ body.demo-mode .ai-dashboard { height: 100vh !important; }
 .ai-chat-msg strong { color: var(--ai-accent); }
 .ai-chat-msg-user strong { color: var(--ai-bg-base); font-weight: 800; }
 
+/* Tablas dentro del chat: borde sutil, header dorado, filas zebradas */
+.ai-chat-table {
+    border-collapse: collapse;
+    margin: 6px 0;
+    font-size: 0.82rem;
+    width: 100%;
+    border: 1px solid var(--ai-border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+.ai-chat-table thead th {
+    background: rgba(232,184,48,0.16);
+    color: var(--ai-accent);
+    font-weight: 700;
+    text-align: left;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--ai-border);
+    text-transform: uppercase;
+    font-size: 0.7rem;
+    letter-spacing: 0.04em;
+}
+.ai-chat-table tbody td {
+    padding: 5px 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.ai-chat-table tbody tr:nth-child(even) td {
+    background: rgba(255,255,255,0.02);
+}
+.ai-chat-table tbody tr:last-child td { border-bottom: none; }
+/* Mensaje del usuario (fondo dorado) — invertir para que la tabla se lea */
+.ai-chat-msg-user .ai-chat-table {
+    border-color: rgba(0,0,0,0.18);
+}
+.ai-chat-msg-user .ai-chat-table thead th {
+    background: rgba(0,0,0,0.12);
+    color: var(--ai-bg-base);
+}
+.ai-chat-msg-user .ai-chat-table tbody td {
+    border-bottom-color: rgba(0,0,0,0.08);
+}
+.ai-chat-msg-user .ai-chat-table tbody tr:nth-child(even) td {
+    background: rgba(0,0,0,0.04);
+}
+[data-theme="light"] .ai-chat-table thead th {
+    background: rgba(232,184,48,0.22);
+}
+[data-theme="light"] .ai-chat-table tbody tr:nth-child(even) td {
+    background: rgba(0,0,0,0.025);
+}
+
 .ai-chat-tools {
     font-size: 0.7rem;
     color: var(--ai-text-muted);

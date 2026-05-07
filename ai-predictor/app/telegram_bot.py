@@ -261,9 +261,12 @@ class TelegramListener:
 
     def _send(self, chat_id: str, text: str) -> None:
         url = f"{TELEGRAM_API}/bot{self.bot_token}/sendMessage"
+        # Telegram Markdown no soporta tablas pipe-style; las convertimos a
+        # bullets para que se lean bien en el chat.
+        text_for_telegram = _markdown_tables_to_bullets(text)
         body = json.dumps({
             "chat_id": chat_id,
-            "text": text,
+            "text": text_for_telegram,
             "parse_mode": "Markdown",
             "disable_web_page_preview": True,
         }).encode("utf-8")
@@ -280,3 +283,83 @@ class TelegramListener:
             log.warning("sendMessage HTTP %s: %s", e.code, e.reason)
         except Exception as e:
             log.warning("sendMessage fallo: %s", e)
+
+
+# --- Helpers --------------------------------------------------------------
+
+def _markdown_tables_to_bullets(text: str) -> str:
+    """Convierte tablas pipe-style (| col | col |) a bullets legibles.
+
+    Telegram Markdown no renderiza tablas — las muestra como texto crudo con
+    los pipes y los `---`, lo cual es ilegible. Cuando detectamos un bloque
+    tabla, lo reemplazamos por:
+
+        *Fila*: col1: val1 · col2: val2 · ...
+
+    Si la primera columna no es relevante (todo "—" o vacia), se omite.
+    """
+    lines = text.split("\n")
+    out = []
+    i = 0
+    while i < len(lines):
+        ln = lines[i]
+        # Detectar tabla: linea con | seguida de separador |---|---|
+        is_table = (
+            "|" in ln
+            and i + 1 < len(lines)
+            and _is_separator_row(lines[i + 1])
+        )
+        if not is_table:
+            out.append(ln)
+            i += 1
+            continue
+
+        headers = _split_pipe_row(ln)
+        i += 2  # skip header + separator
+        body = []
+        while i < len(lines) and "|" in lines[i] and lines[i].strip():
+            body.append(_split_pipe_row(lines[i]))
+            i += 1
+
+        # Render: si la primera col luce como un identificador (corta, sin
+        # espacios), la usamos como label de cada fila; el resto va en pares
+        # "header: valor".
+        for row in body:
+            if not row:
+                continue
+            label = row[0] if row else ""
+            rest_pairs = []
+            for j in range(1, len(headers)):
+                if j < len(row) and row[j]:
+                    rest_pairs.append(f"{headers[j]}: {row[j]}")
+            if label and rest_pairs:
+                out.append(f"• *{label}* — " + " · ".join(rest_pairs))
+            elif label:
+                out.append(f"• {label}")
+            elif rest_pairs:
+                out.append("• " + " · ".join(rest_pairs))
+        # Nota: ignoramos los headers como linea suelta — los reincorporamos
+        # como etiqueta de cada par.
+    return "\n".join(out)
+
+
+def _is_separator_row(line: str) -> bool:
+    s = line.strip()
+    if not s:
+        return False
+    # | --- | :---: | --- |   o variantes sin pipes externos
+    cells = s.strip("|").split("|")
+    return all(re_match(r"^\s*:?-+:?\s*$", c) for c in cells if c is not None)
+
+
+def _split_pipe_row(line: str) -> list[str]:
+    return [c.strip() for c in line.strip().strip("|").split("|")]
+
+
+# Importado tarde para no traer `re` arriba si nadie lo usa; el modulo ya
+# importa otras cosas, una mas no afecta. Lo mantenemos como funcion para
+# que el modulo sea autocontenido.
+import re as _re  # noqa: E402
+
+def re_match(pattern: str, string: str) -> bool:
+    return _re.match(pattern, string) is not None

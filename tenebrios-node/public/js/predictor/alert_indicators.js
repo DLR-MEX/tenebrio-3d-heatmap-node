@@ -11,6 +11,9 @@
 
 const GROUP_LABELS = { TEMP: 'temperatura', HUM: 'humedad' };
 const GROUP_UNITS  = { TEMP: '°C',          HUM: '%' };
+// Sensores exteriores: NUNCA cuentan como alerta (son informativos, reflejan
+// el clima de afuera, fuera del rango interior es esperable).
+const EXTERIOR_VARS = new Set(['tex', 'hex']);
 
 // Numeros agregados por grupo (para el contador del boton)
 const groupCounts = { TEMP: 0, HUM: 0 };
@@ -23,6 +26,7 @@ export function updateAlertIndicators(group, payload) {
     const unit = GROUP_UNITS[group] || '';
 
     for (const v of payload.vars) {
+        if (EXTERIOR_VARS.has(v)) continue;  // exteriores no son alerta
         const a = payload.alerts[v];
         if (!a) continue;
         if (a.current === 'abnormal') {

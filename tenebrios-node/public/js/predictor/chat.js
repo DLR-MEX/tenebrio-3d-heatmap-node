@@ -146,35 +146,85 @@ function appendMessage(m, scroll = true) {
     if (scroll) msgsEl.scrollTop = msgsEl.scrollHeight;
 }
 
-// Markdown lite a mano (negritas **x**, codigo `x`, listas - x).
-// Sin librerias externas. Escapamos HTML primero.
+// Markdown lite a mano: negritas **x**, codigo `x`, listas (- x), tablas
+// pipe-style. Sin librerias externas. Escapamos HTML primero.
 function renderMarkdownLite(text) {
     let s = String(text)
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;');
-    // Codigo inline
+    // Codigo inline (antes de inlines que pudieran tocar `)
     s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
     // Negritas
     s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
     // Italicas
     s = s.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
-    // Listas (linea que empieza con "- " o "• ")
+
+    // Procesado por bloques. Tablas y listas tienen su propia logica
+    // multilinea; el resto se va a la salida con <br>.
     const lines = s.split('\n');
-    let inList = false;
     const out = [];
-    for (const ln of lines) {
+    let inList = false;
+    let i = 0;
+    while (i < lines.length) {
+        const ln = lines[i];
+
+        // Detectar tabla: linea con pipes seguida de linea separadora |---|---|
+        if (
+            ln.includes('|') &&
+            i + 1 < lines.length &&
+            /^\s*\|?\s*[:-]+\s*(\|\s*[:-]+\s*)+\|?\s*$/.test(lines[i + 1])
+        ) {
+            if (inList) { out.push('</ul>'); inList = false; }
+            const headerCells = splitPipeRow(ln);
+            i += 2; // salta header y separador
+            const bodyRows = [];
+            while (i < lines.length && lines[i].includes('|') && lines[i].trim() !== '') {
+                bodyRows.push(splitPipeRow(lines[i]));
+                i += 1;
+            }
+            out.push(renderTable(headerCells, bodyRows));
+            continue;
+        }
+
+        // Listas (linea que empieza con "- " o "• ")
         const m = ln.match(/^\s*[-•]\s+(.*)$/);
         if (m) {
             if (!inList) { out.push('<ul>'); inList = true; }
             out.push(`<li>${m[1]}</li>`);
-        } else {
-            if (inList) { out.push('</ul>'); inList = false; }
-            out.push(ln);
+            i += 1;
+            continue;
         }
+
+        if (inList) { out.push('</ul>'); inList = false; }
+        out.push(ln);
+        i += 1;
     }
     if (inList) out.push('</ul>');
-    return out.join('<br>').replace(/<\/ul><br>/g, '</ul>').replace(/<br><ul>/g, '<ul>');
+
+    // Une con <br> sin meter <br> antes/despues de bloques (ul, table)
+    return out.join('<br>')
+        .replace(/<br><(ul|table)/g, '<$1')
+        .replace(/<\/(ul|table)><br>/g, '</$1>');
+}
+
+function splitPipeRow(line) {
+    // Trim y quita pipes de borde
+    const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+    return trimmed.split('|').map((c) => c.trim());
+}
+
+function renderTable(headers, rows) {
+    const th = headers.map((h) => `<th>${h}</th>`).join('');
+    const tbody = rows.map((r) => {
+        // Si la fila tiene menos columnas que el header, rellena
+        const cells = [];
+        for (let i = 0; i < headers.length; i++) {
+            cells.push(`<td>${r[i] ?? ''}</td>`);
+        }
+        return `<tr>${cells.join('')}</tr>`;
+    }).join('');
+    return `<table class="ai-chat-table"><thead><tr>${th}</tr></thead><tbody>${tbody}</tbody></table>`;
 }
 
 function autosize() {

@@ -74,6 +74,11 @@ def build_alerts(current: dict, predicted: dict, var_names: list[str], group: st
 GROUP_LABELS = {"TEMP": "Temperatura", "HUM": "Humedad"}
 GROUP_UNITS = {"TEMP": "°C", "HUM": "%"}
 
+# Sensores exteriores (intemperie). Estan en el grupo TEMP/HUM por convenciencia
+# del modelo, pero no son alerta legitima — reflejan el clima de afuera. NO se
+# notifican via Telegram ni se registran como transiciones en el AlertLog.
+EXTERIOR_VARS = {"tex", "hex"}
+
 # Archivo de configuracion mutable en runtime (persiste cambios hechos
 # desde la UI). Se sobrescribe sobre los valores de .env al inicio. Nunca
 # guarda secretos: el bot_token solo vive en .env.
@@ -184,6 +189,10 @@ class TelegramNotifier:
 
         with self._lock:
             for var in var_names:
+                # Sensores exteriores: solo informativos, no son alerta.
+                # Saltamos por completo (ni alert log ni Telegram).
+                if var in EXTERIOR_VARS:
+                    continue
                 cur_state = alerts[var]["current"]
                 pred_state = alerts[var]["predicted"]
                 cur_val = current_values.get(var)

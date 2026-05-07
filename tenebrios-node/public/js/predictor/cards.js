@@ -5,6 +5,8 @@
 import { playDanger } from './alert_sound.js';
 
 const fmt = (n, d = 2) => Number.isFinite(n) ? n.toFixed(d) : '—';
+// Sensores exteriores: reflejan clima de afuera, no son alerta legitima.
+const EXTERIOR_VARS = new Set(['tex', 'hex']);
 
 // Almacen de instancias ECharts por sensor (para no recrearlas cada update)
 const sparks = { TEMP: {}, HUM: {} };
@@ -44,7 +46,13 @@ export function updateCard(group, vars, idx, current, predicted, alerts, history
     const cur = current[v];
     const pred = predicted[v];
     const delta = pred - cur;
-    const a = alerts?.[v] || { current: 'unknown', predicted: 'unknown' };
+    let a = alerts?.[v] || { current: 'unknown', predicted: 'unknown' };
+    // Para sensores exteriores forzamos estado "ok" en la UI: son
+    // informativos del clima de afuera, no del cuarto. Asi la card no
+    // pinta rojo, ni dispara sonido, ni shake, ni el banner los cuenta.
+    if (EXTERIOR_VARS.has(v)) {
+        a = { current: 'ok', predicted: 'ok', _zone: 'exterior' };
+    }
 
     // Una vez llega data, removemos los skeletons (idempotente).
     if (card.classList.contains('loading')) {
@@ -97,7 +105,12 @@ export function updateCard(group, vars, idx, current, predicted, alerts, history
     const statusEl = card.querySelector('[data-role="status"]');
     if (statusEl) {
         let label, cls, icon;
-        if (a.current === 'abnormal') {
+        if (EXTERIOR_VARS.has(v)) {
+            // Sensor exterior: pill informativa, no compite con alertas
+            icon = '🌡';
+            label = 'Exterior';
+            cls = 'unknown';
+        } else if (a.current === 'abnormal') {
             icon = '🚨';
             label = 'PELIGRO';
             cls = 'danger';
