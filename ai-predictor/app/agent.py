@@ -50,6 +50,12 @@ ARQUITECTURA DEL CUARTO:
 - Hay 5 sensores INTERIORES de humedad: h1, h2, h3, h4, h5 (dentro del cuarto). Unidad: %.
 - Hay 1 sensor EXTERIOR de temperatura: tex (en la calle/intemperie). Unidad: °C.
 - Hay 1 sensor EXTERIOR de humedad: hex (en la calle/intemperie). Unidad: %.
+- Métricas agregadas adicionales (informativas, NO predichas por el modelo):
+  * tps = temperatura promedio SUPERIOR (parte alta del cuarto). Aparece en
+    el campo "extras" de get_current_state.
+  * tpi = temperatura promedio INFERIOR (parte baja del cuarto). Idem.
+  Cuando el usuario pregunte por "promedio superior", "promedio inferior",
+  "tps", "tpi" o "estratificación térmica", lee estos campos de extras.
 
 RANGOS ÓPTIMOS (aplican SOLO a sensores INTERIORES):
 - TEMP interior (t1–t5): 15–30 °C. Fuera = "anormal" → requiere atención.
@@ -455,10 +461,13 @@ class AgentService:
             "now_iso": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(snap.get("now") or time.time())),
             "groups": {},
             "thresholds": snap.get("thresholds"),
+            "extras": snap.get("extras") or {},
             "_note": (
                 "tex y hex son sensores EXTERIORES (intemperie); aunque su flag "
                 "'abnormal' use el mismo umbral interior, NO son alertas — son "
-                "informativos del clima afuera."
+                "informativos del clima afuera. tps y tpi en 'extras' son "
+                "promedios agregados (superior/inferior) — informativos, no "
+                "predichos por el modelo."
             ),
         }
         for group_name in ("TEMP", "HUM"):

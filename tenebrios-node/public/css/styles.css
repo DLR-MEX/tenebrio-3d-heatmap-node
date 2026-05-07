@@ -1348,6 +1348,48 @@ body.demo-mode .ai-dashboard { height: 100vh !important; }
     .ai-cfg-btn-primary, .ai-cfg-btn-secondary { flex: 1; padding: 9px 8px; }
 }
 
+/* Fila de promedios agregados (tps/tpi). Chips compactos arriba del grid
+   de cards, indican valor en vivo sin ocupar el espacio de una card real. */
+.ai-extras-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 4px 0 12px;
+}
+.ai-extras-row:empty { display: none; }
+.ai-extra-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: rgba(232,184,48,0.08);
+    border: 1px solid var(--ai-border);
+    border-radius: 999px;
+    font-size: 0.78rem;
+    color: var(--ai-text);
+    transition: background 0.18s, transform 0.18s;
+}
+.ai-extra-chip.flash {
+    background: rgba(232,184,48,0.22);
+    transform: scale(1.04);
+}
+.ai-extra-chip-icon { font-size: 0.95rem; line-height: 1; }
+.ai-extra-chip-label {
+    font-size: 0.65rem;
+    color: var(--ai-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+.ai-extra-chip-value {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-weight: 700;
+    color: var(--ai-accent);
+}
+[data-theme="light"] .ai-extra-chip {
+    background: rgba(232,184,48,0.10);
+}
+[data-theme="light"] .ai-extra-chip-value { color: #92651a; }
+
 /* Jump toasts: notificaciones transitorias de rate-of-change.
    Aparecen arriba a la derecha de la vista IA y se auto-eliminan a los 6s. */
 .ai-jump-toasts {

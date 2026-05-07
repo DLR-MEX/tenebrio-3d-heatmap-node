@@ -88,6 +88,18 @@ function applySnapshot(snap) {
     setText('ai-device-label', snap.device || '—');
     setStatus(snap.mqtt_connected, snap.mqtt_connected ? 'online' : 'offline');
 
+    // Cargar extras (tps, tpi) si vienen en el snapshot
+    const extras = snap.extras || {};
+    for (const [v, info] of Object.entries(extras)) {
+        if (info && Number.isFinite(info.value)) {
+            renderExtraChip(v, {
+                label: info.label || v,
+                value: info.value,
+                unit: info.unit || '°C',
+            });
+        }
+    }
+
     for (const group of ['TEMP', 'HUM']) {
         const g = snap.groups?.[group];
         if (!g) continue;
@@ -122,6 +134,14 @@ function applyUpdate(payload) {
     }
     if (payload.type === 'jump') {
         showJumpToast(payload);
+        return;
+    }
+    if (payload.type === 'extra') {
+        renderExtraChip(payload.var, {
+            label: payload.label,
+            value: payload.value,
+            unit: payload.unit || '°C',
+        });
         return;
     }
     if (payload.type === 'prediction') {
@@ -190,6 +210,33 @@ function fmtTime(sec) {
     return new Date(sec * 1000).toLocaleTimeString([], {
         hour: '2-digit', minute: '2-digit', second: '2-digit',
     });
+}
+
+// Render/actualiza un chip de promedio agregado (tps, tpi). Idempotente:
+// si el chip ya existe, solo actualiza el valor y le da un flash visual.
+const EXTRA_ICONS = { tps: '🔼', tpi: '🔽' };
+
+function renderExtraChip(varName, info) {
+    const host = document.getElementById('ai-extras-temp');
+    if (!host) return;
+    let chip = host.querySelector(`[data-var="${varName}"]`);
+    if (!chip) {
+        chip = document.createElement('div');
+        chip.className = 'ai-extra-chip';
+        chip.dataset.var = varName;
+        chip.innerHTML = `
+            <span class="ai-extra-chip-icon">${EXTRA_ICONS[varName] || '·'}</span>
+            <span class="ai-extra-chip-label" data-role="label"></span>
+            <span class="ai-extra-chip-value" data-role="value"></span>
+        `;
+        host.appendChild(chip);
+    }
+    chip.querySelector('[data-role="label"]').textContent = info.label || varName;
+    chip.querySelector('[data-role="value"]').textContent =
+        `${Number(info.value).toFixed(2)}${info.unit || ''}`;
+    // Flash breve para indicar update en vivo
+    chip.classList.add('flash');
+    setTimeout(() => chip.classList.remove('flash'), 600);
 }
 
 // Toast transitorio para eventos jump (rate-of-change). Aparece arriba a la

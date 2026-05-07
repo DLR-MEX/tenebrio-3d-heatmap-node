@@ -34,6 +34,16 @@ MODELS_DIR = ROOT / "models"
 
 TEMP_VARS = ["t1", "t2", "t3", "t4", "t5", "tex"]
 HUM_VARS = ["h1", "h2", "h3", "h4", "h5", "hex"]
+
+# Variables informativas adicionales del dispositivo (no entran al modelo,
+# se muestran como contexto en el dashboard y son consultables por el agente).
+# tps = temperatura promedio superior, tpi = temperatura promedio inferior.
+# Provienen del mismo device Ubidots que t1..t5.
+EXTRA_TEMP_VARS = ["tps", "tpi"]
+EXTRA_VAR_LABELS = {
+    "tps": "Promedio superior",
+    "tpi": "Promedio inferior",
+}
 LOOK_BACK = 30
 STEP_AHEAD = 3
 HISTORY_MAX = 240  # ~ ultimas 240 predicciones por grupo en memoria
@@ -751,6 +761,9 @@ class PredictionService:
             "TEMP": {"current": {}, "predicted": {}, "alerts": {}, "ts": None},
             "HUM": {"current": {}, "predicted": {}, "alerts": {}, "ts": None},
         }
+        # Variables informativas del device (no entran al predictor): tps/tpi.
+        # var -> {"value": float, "ts": float}. Las refrescamos en cada msg MQTT.
+        self.extras: dict[str, dict] = {}
         self.history: dict[str, deque[dict]] = {
             "TEMP": deque(maxlen=HISTORY_MAX),
             "HUM": deque(maxlen=HISTORY_MAX),
@@ -866,6 +879,17 @@ class PredictionService:
                 "thresholds": {
                     "TEMP": {"min": TEMP_OPTIMAL_MIN, "max": TEMP_OPTIMAL_MAX},
                     "HUM":  {"min": HUM_OPTIMAL_MIN,  "max": HUM_OPTIMAL_MAX},
+                },
+                # Variables informativas adicionales (tps, tpi). Snapshot ligero;
+                # los updates van por broadcast type='extra'.
+                "extras": {
+                    var: {
+                        "label": EXTRA_VAR_LABELS.get(var, var),
+                        "value": data.get("value"),
+                        "ts": data.get("ts"),
+                        "unit": "°C",
+                    }
+                    for var, data in self.extras.items()
                 },
             }
 
@@ -1068,6 +1092,20 @@ class PredictionService:
             sample = self.hum_bucket.update(var, value)
             if sample is not None:
                 self._handle_sample(self.hum_predictor, sample, "HUM")
+        elif var in EXTRA_TEMP_VARS:
+            # tps/tpi: solo informativo. Guardamos y broadcasteamos para que
+            # el dashboard muestre el valor actual; no entra al predictor.
+            ts = time.time()
+            with self._state_lock:
+                self.extras[var] = {"value": value, "ts": ts}
+            self._broadcast({
+                "type": "extra",
+                "var": var,
+                "label": EXTRA_VAR_LABELS.get(var, var),
+                "value": value,
+                "ts": ts,
+                "unit": "°C",
+            })
 
     def _on_rate_jump(self, group: str, var: str, ts: float, prev_val: float,
                      cur_val: float, delta: float) -> None:
