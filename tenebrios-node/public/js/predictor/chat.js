@@ -6,7 +6,7 @@
 const ENDPOINT = '/api/predictor/agent/chat';
 const STORAGE_KEY = 'ai-chat-history-v1';
 const MAX_HISTORY = 30;
-const REQUEST_TIMEOUT_MS = 35000;
+const REQUEST_TIMEOUT_MS = 95000;
 
 const EMPTY_HTML = `
     <div class="ai-chat-empty">

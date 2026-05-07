@@ -360,11 +360,15 @@ export function createApp() {
   // proxyJson; lo elevamos para chat porque las queries con tool calls pueden
   // tardar 5-15s (multiples roundtrips al LLM y a Ubidots).
   const agentJsonParser = express.json({ limit: '32kb' });
+  // 90s: queries que necesitan multiple tool calls + Ubidots histórico
+  // pueden ser lentas (5-30s + roundtrips LLM). El cliente del widget usa
+  // un AbortController propio mas estricto para no dejar al usuario esperando
+  // demasiado en el browser.
+  const AGENT_CHAT_TIMEOUT_MS = 90000;
   app.post('/api/predictor/agent/chat', agentJsonParser, async (req, res) => {
-    // Override del timeout solo para esta ruta — chat es naturalmente lento
     const upstreamUrl = `${AI_PREDICTOR_BASE}/api/agent/chat`;
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s
+    const timeoutId = setTimeout(() => controller.abort(), AGENT_CHAT_TIMEOUT_MS);
     try {
       const upstream = await fetch(upstreamUrl, {
         method: 'POST',
@@ -379,10 +383,10 @@ export function createApp() {
       res.send(text);
     } catch (err) {
       const isAbort = err.name === 'AbortError';
-      logger.warn(`agent chat: ${isAbort ? 'timeout (>30s)' : err.message}`);
+      logger.warn(`agent chat: ${isAbort ? `timeout (>${AGENT_CHAT_TIMEOUT_MS}ms)` : err.message}`);
       res.status(isAbort ? 504 : 503).json({
         error: isAbort
-          ? 'El agente tardó más de 30s en responder. Intenta una pregunta más simple.'
+          ? `El agente tardó más de ${Math.round(AGENT_CHAT_TIMEOUT_MS / 1000)}s en responder. Intenta una pregunta más específica.`
           : `Agente inalcanzable: ${err.message}`,
       });
     } finally {

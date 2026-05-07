@@ -166,6 +166,19 @@ class AlertLog:
             log.warning("AlertLog.count fallo: %s", e)
             return 0
 
+    def oldest_ts(self) -> Optional[float]:
+        """Timestamp del registro mas antiguo (epoch s) o None si esta vacio.
+        Util para que el agente sepa hasta donde llega el historico real."""
+        try:
+            cur = self._conn.execute("SELECT MIN(ts) AS t FROM alert_events")
+            row = cur.fetchone()
+            if row and row["t"] is not None:
+                return float(row["t"])
+            return None
+        except sqlite3.Error as e:
+            log.warning("AlertLog.oldest_ts fallo: %s", e)
+            return None
+
     def cleanup(self, older_than_days: int = 30) -> int:
         """Borra registros mas viejos que N dias. Devuelve filas borradas."""
         cutoff = time.time() - (older_than_days * 86400)

@@ -93,6 +93,19 @@ TU ROL:
 - Cuando reportes valores, distingue claramente entre interiores y exteriores.
   Ejemplo bueno: "Interiores: t1=28.5, t2=27.6 (todos en rango). Exterior tex=42 (calor afuera)."
   Ejemplo malo: "tex=42°C está fuera de rango óptimo".
+
+ESTRATEGIA EFICIENTE (tienes maximo 10 tool calls por conversacion):
+- NO consultes todos los sensores uno por uno cuando esten en el mismo grupo.
+  Si quieres saber "desde cuando esta mal la humedad", basta con 1 sensor
+  representativo (ej. h1) — todos los del cuarto reciben el mismo aire.
+- Si get_history_ubidots devuelve range_start_state="abnormal" y no hay
+  transicion ok->abnormal en el periodo, significa que la anomalia es mas
+  vieja: re-llama con un hours mayor (ej. 6h -> 24h -> 72h -> 168h).
+- get_history_ubidots ya devuelve "first_transition_ok_to_abnormal_ts_iso"
+  y "interpretation". USA ESOS CAMPOS — no escanees las muestras a mano.
+- Despues de 2-3 escalaciones sin encontrar inicio, di al usuario "lleva
+  al menos N horas/dias fuera de rango, no pude encontrar el inicio exacto
+  en los datos disponibles".
 """
 
 
@@ -220,7 +233,7 @@ class AgentService:
     Wrapper sobre el cliente Ollama. No-op si OLLAMA_API_KEY no esta seteado.
     """
 
-    MAX_TOOL_LOOPS = 6  # techo defensivo para no entrar en loop infinito
+    MAX_TOOL_LOOPS = 10  # techo defensivo para no entrar en loop infinito
 
     def __init__(
         self,
@@ -472,19 +485,44 @@ class AgentService:
                         "current_value": current.get(v),
                     })
 
+        # Cuanto historial REAL tiene el AlertLog. Si el sidecar arranco hace
+        # poco, el log puede tener solo unas horas de data — el agente no debe
+        # asumir que el log abarca todo el periodo consultado.
+        oldest_ts = self.alert_log.oldest_ts()
+        log_oldest_iso = (
+            time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(oldest_ts))
+            if oldest_ts else None
+        )
+        log_age_hours = (time.time() - oldest_ts) / 3600 if oldest_ts else 0.0
+        # Si el log es mas reciente que el periodo solicitado, hay un gap:
+        # los datos del log no cubren `hours` horas atras.
+        log_covers_full_period = (oldest_ts is not None) and ((time.time() - oldest_ts) >= hours * 3600 - 60)
+
         # Pista interpretativa: si transitions_to_abnormal=0 pero hay
         # currently_abnormal, significa que el/los sensores YA estaban
         # fuera de rango antes de la ventana consultada y siguen asi.
         interpretation = ""
         if total == 0 and currently_abnormal and len(rows) == 0:
             sensors = ", ".join(s["var"] for s in currently_abnormal)
-            interpretation = (
-                f"NOTA: 0 transiciones en el periodo, PERO {sensors} estan "
-                "actualmente en estado abnormal. Esto significa que llevan "
-                "mas tiempo del consultado en alerta (entraron antes del "
-                "inicio del periodo y no han salido). Reportalo como anomalia "
-                "persistente, NO como 'sin anomalias'."
-            )
+            if not log_covers_full_period:
+                interpretation = (
+                    f"NOTA CRITICA: 0 transiciones, PERO el AlertLog solo tiene "
+                    f"{log_age_hours:.1f} h de historico (arranco en {log_oldest_iso}); "
+                    f"NO cubre todo el periodo de {hours:.0f}h solicitado. Los sensores "
+                    f"{sensors} estan abnormal AHORA. Para saber DESDE CUANDO la humedad "
+                    "esta fuera de rango, usa get_history_ubidots(var='h1', hours=24) "
+                    "y busca el primer punto bajo el umbral (60% para HUM, 15-30°C para TEMP)."
+                )
+            else:
+                interpretation = (
+                    f"NOTA: 0 transiciones en el periodo, PERO {sensors} estan "
+                    "actualmente en estado abnormal. Como el AlertLog si cubre "
+                    f"el periodo ({log_age_hours:.1f}h de historico), la anomalia "
+                    "es persistente desde antes del inicio del periodo. Reportalo "
+                    "como anomalia persistente. Si el usuario quiere saber el "
+                    "momento exacto, sugiere usar get_history_ubidots para escanear "
+                    "el time series de Ubidots."
+                )
 
         return {
             "hours_back": hours,
@@ -493,6 +531,8 @@ class AgentService:
             "transitions_returned": len(formatted),
             "transitions": formatted,
             "currently_abnormal_interior_sensors": currently_abnormal,
+            "alert_log_oldest_ts_iso": log_oldest_iso,
+            "alert_log_covers_full_period": log_covers_full_period,
             "interpretation_hint": interpretation,
         }
 
@@ -529,6 +569,57 @@ class AgentService:
         vmax = max(values)
         vavg = sum(values) / n
 
+        # Detectar transiciones de estado en el time series. Para sensores
+        # interiores aplicamos el umbral del grupo; para tex/hex no aplica.
+        # Devolvemos un resumen ASI el LLM no tiene que escanear muestras.
+        is_interior = var not in ("tex", "hex") and not predicted
+        threshold_summary = None
+        first_abnormal_ts_iso = None
+        first_abnormal_after_normal_ts_iso = None
+        time_outside_pct = None
+        if is_interior:
+            from app.service import (
+                TEMP_OPTIMAL_MIN, TEMP_OPTIMAL_MAX,
+                HUM_OPTIMAL_MIN, HUM_OPTIMAL_MAX,
+            )
+            if var.startswith("t"):
+                lo, hi = TEMP_OPTIMAL_MIN, TEMP_OPTIMAL_MAX
+            else:
+                lo, hi = HUM_OPTIMAL_MIN, HUM_OPTIMAL_MAX
+
+            outside_count = 0
+            prev_state = None
+            first_outside_ts = None
+            first_transition_ts = None
+            for ts_ms, val in rows:
+                state = "ok" if lo <= val <= hi else "abnormal"
+                if state == "abnormal":
+                    outside_count += 1
+                    if first_outside_ts is None:
+                        first_outside_ts = ts_ms
+                if (prev_state is not None
+                        and prev_state == "ok"
+                        and state == "abnormal"
+                        and first_transition_ts is None):
+                    first_transition_ts = ts_ms
+                prev_state = state
+
+            time_outside_pct = round((outside_count / n) * 100, 1) if n > 0 else 0.0
+            if first_outside_ts is not None:
+                first_abnormal_ts_iso = time.strftime(
+                    "%Y-%m-%d %H:%M:%S", time.localtime(first_outside_ts / 1000)
+                )
+            if first_transition_ts is not None:
+                first_abnormal_after_normal_ts_iso = time.strftime(
+                    "%Y-%m-%d %H:%M:%S", time.localtime(first_transition_ts / 1000)
+                )
+            threshold_summary = {
+                "min_optimal": lo,
+                "max_optimal": hi,
+                "current_outside_optimal": outside_count,
+                "time_outside_pct": time_outside_pct,
+            }
+
         # Submuestrear para no saturar al LLM (max 30 puntos)
         if n > 30:
             step = n // 30
@@ -547,7 +638,7 @@ class AgentService:
                 }
                 for t, v in rows
             ]
-        return {
+        out = {
             "var": ubidots_label,
             "hours_back": hours,
             "samples_total": n,
@@ -559,6 +650,28 @@ class AgentService:
             },
             "samples": sampled,
         }
+        if threshold_summary is not None:
+            out["threshold_analysis"] = threshold_summary
+            # Cuando empezo a estar fuera de rango (primer punto abnormal)
+            out["first_abnormal_ts_iso"] = first_abnormal_ts_iso
+            # Cuando hubo una TRANSICION (de ok a abnormal) en el periodo
+            out["first_transition_ok_to_abnormal_ts_iso"] = first_abnormal_after_normal_ts_iso
+            # Si el primer punto del rango ya era abnormal y nunca volvio a ok,
+            # eso significa que el sensor lleva al menos `hours` fuera de rango.
+            first_value = rows[0][1]
+            last_value = rows[-1][1]
+            first_state = "abnormal" if not (lo <= first_value <= hi) else "ok"
+            last_state = "abnormal" if not (lo <= last_value <= hi) else "ok"
+            out["range_start_state"] = first_state
+            out["range_end_state"] = last_state
+            if first_state == "abnormal" and first_abnormal_after_normal_ts_iso is None:
+                out["interpretation"] = (
+                    f"El sensor {var} ya estaba fuera de rango al inicio del periodo "
+                    f"consultado ({hours}h atras) y no hubo transicion a ok. La anomalia "
+                    f"comenzo ANTES de hace {hours}h. Para encontrar el inicio exacto, "
+                    "vuelve a llamar get_history_ubidots con un hours mayor (max 168 = 7 dias)."
+                )
+        return out
 
     def _resolve_var_id(self, label: str) -> Optional[str]:
         """Cache de var label -> Ubidots variable ID. Llena toda la lista al primer miss."""
