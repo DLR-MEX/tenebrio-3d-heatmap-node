@@ -111,9 +111,22 @@ function applyToForm(data) {
     const enabled = document.getElementById('ai-cfg-enabled');
     const chat = document.getElementById('ai-cfg-chatid');
     const cooldown = document.getElementById('ai-cfg-cooldown');
+    const listener = document.getElementById('ai-cfg-listener');
+    const listenerHint = document.getElementById('ai-cfg-listener-hint');
     if (enabled) enabled.checked = Boolean(data.enabled);
     if (chat) chat.value = data.chat_id || '';
     if (cooldown) cooldown.value = Number.isFinite(data.cooldown_sec) ? data.cooldown_sec : 300;
+    if (listener) {
+        listener.checked = Boolean(data.listener_enabled);
+        // Si el agente IA no esta listo (sin API key), deshabilitamos el toggle
+        const available = Boolean(data.listener_available);
+        listener.disabled = !available;
+        if (listenerHint) {
+            listenerHint.textContent = available
+                ? 'Si activas esto, el bot responde mensajes que le mandes en lenguaje natural usando la API de Ollama Cloud. Consume tokens del LLM.'
+                : 'Agente IA no configurado (falta OLLAMA_API_KEY en .env del sidecar). Configurar y reiniciar para habilitar.';
+        }
+    }
 
     const stateBadge = document.getElementById('ai-cfg-state');
     if (stateBadge) {
@@ -135,6 +148,7 @@ async function onSave(e) {
     }
 
     const enabled = document.getElementById('ai-cfg-enabled')?.checked || false;
+    const listenerEnabled = document.getElementById('ai-cfg-listener')?.checked || false;
     const cooldownStr = document.getElementById('ai-cfg-cooldown')?.value || '300';
     const cooldown = parseFloat(cooldownStr);
 
@@ -151,7 +165,7 @@ async function onSave(e) {
     setBusy(true);
     setMessage('Guardando...', null);
 
-    const payload = { chat_id: chat, enabled, cooldown_sec: cooldown };
+    const payload = { chat_id: chat, enabled, cooldown_sec: cooldown, listener_enabled: listenerEnabled };
     // Diagnostico en consola para que F12 muestre exactamente que mandamos
     console.log('[telegram-cfg] POST', API.post, payload);
 

@@ -78,7 +78,16 @@ GROUP_UNITS = {"TEMP": "°C", "HUM": "%"}
 # desde la UI). Se sobrescribe sobre los valores de .env al inicio. Nunca
 # guarda secretos: el bot_token solo vive en .env.
 RUNTIME_CONFIG_PATH = ROOT / "runtime_config.json"
-RUNTIME_ALLOWED_KEYS = {"telegram_enabled", "telegram_chat_id", "telegram_cooldown_sec"}
+RUNTIME_ALLOWED_KEYS = {
+    "telegram_enabled",
+    "telegram_chat_id",
+    "telegram_cooldown_sec",
+    # Si el bot debe responder mensajes entrantes con el agente IA.
+    # Default false (opt-in para evitar usar tokens del LLM sin querer).
+    "telegram_listener_enabled",
+    # Persistencia del cursor de getUpdates (no re-procesar mensajes en reinicio)
+    "telegram_last_update_id",
+}
 
 
 def load_runtime_config() -> dict:
@@ -368,6 +377,7 @@ class Config:
     telegram_bot_token: str
     telegram_chat_id: str
     telegram_cooldown_sec: float
+    telegram_listener_enabled: bool
     agent_enabled: bool
     ollama_api_key: str
     ollama_host: str
@@ -398,6 +408,7 @@ class Config:
             telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
             telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip(),
             telegram_cooldown_sec=float(os.getenv("TELEGRAM_COOLDOWN_SEC", "300")),
+            telegram_listener_enabled=os.getenv("TELEGRAM_LISTENER_ENABLED", "false").lower() == "true",
             agent_enabled=os.getenv("AGENT_ENABLED", "true").lower() == "true",
             ollama_api_key=os.getenv("OLLAMA_API_KEY", "").strip(),
             ollama_host=os.getenv("OLLAMA_HOST", "https://ollama.com").strip(),
@@ -416,6 +427,7 @@ class Config:
                 "telegram_enabled": bool(rt.get("telegram_enabled", self.telegram_enabled)),
                 "telegram_chat_id": str(rt.get("telegram_chat_id", self.telegram_chat_id)),
                 "telegram_cooldown_sec": float(rt.get("telegram_cooldown_sec", self.telegram_cooldown_sec)),
+                "telegram_listener_enabled": bool(rt.get("telegram_listener_enabled", self.telegram_listener_enabled)),
             }
         )
 
@@ -580,6 +592,7 @@ class PredictionService:
         # Aplicar runtime_config.json (cambios persistidos desde la UI)
         # encima de los valores de .env. El bot_token nunca se sobrescribe.
         effective_cfg = cfg.with_runtime_overrides()
+        self.effective_cfg = effective_cfg
         self.telegram = TelegramNotifier(
             bot_token=cfg.telegram_bot_token,  # siempre del .env
             chat_id=effective_cfg.telegram_chat_id,
@@ -587,6 +600,10 @@ class PredictionService:
             cooldown_sec=effective_cfg.telegram_cooldown_sec,
             alert_log=self.alert_log,
         )
+        # Listener bidireccional. Se construye en attach_agent() porque
+        # depende del AgentService, que se crea despues del PredictionService
+        # en main.lifespan().
+        self.telegram_listener = None  # type: Optional["TelegramListener"]
 
         # estado compartido
         self._state_lock = threading.Lock()
@@ -625,6 +642,48 @@ class PredictionService:
 
     def attach_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
+
+    def attach_agent(self, agent) -> None:
+        """Llamado desde main.lifespan() despues de crear el AgentService.
+        Construye el TelegramListener si bot_token, chat_id y agent estan listos.
+        """
+        # Import dentro para evitar ciclos en tiempo de carga
+        from app.telegram_bot import TelegramListener
+
+        if not self.cfg.telegram_bot_token:
+            self.log.info("TelegramListener no creado (sin TELEGRAM_BOT_TOKEN)")
+            return
+
+        def _save_offset(offset_int: int) -> None:
+            current = load_runtime_config()
+            current["telegram_last_update_id"] = int(offset_int)
+            save_runtime_config(current)
+
+        def _load_offset() -> int:
+            current = load_runtime_config()
+            try:
+                return int(current.get("telegram_last_update_id") or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        self.telegram_listener = TelegramListener(
+            bot_token=self.cfg.telegram_bot_token,
+            chat_id=self.telegram.chat_id,
+            agent=agent,
+            prediction_service=self,
+            alert_log=self.alert_log,
+            save_offset_cb=_save_offset,
+            load_offset_cb=_load_offset,
+        )
+        # Solo arranca si el flag runtime esta en true (opt-in)
+        if self.effective_cfg.telegram_listener_enabled and agent and agent.ready:
+            self.telegram_listener.update_settings(enabled=True)
+        else:
+            self.log.info(
+                "TelegramListener creado pero no arrancado (listener_enabled=%s agent_ready=%s)",
+                self.effective_cfg.telegram_listener_enabled,
+                agent.ready if agent else False,
+            )
 
     def subscribe(self) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=64)
@@ -731,6 +790,11 @@ class PredictionService:
 
     def stop(self) -> None:
         self._stop.set()
+        if self.telegram_listener is not None:
+            try:
+                self.telegram_listener.stop()
+            except Exception:
+                pass
         self.client.loop_stop()
         self.client.disconnect()
         try:
@@ -744,19 +808,40 @@ class PredictionService:
         chat_id: Optional[str] = None,
         enabled: Optional[bool] = None,
         cooldown_sec: Optional[float] = None,
+        listener_enabled: Optional[bool] = None,
     ) -> dict:
-        """Actualiza el notifier en memoria Y persiste a runtime_config.json."""
+        """Actualiza el notifier en memoria Y persiste a runtime_config.json.
+        El listener se controla con listener_enabled (independiente del notifier
+        de salida; uno puede mandar alertas sin escuchar y viceversa)."""
         snap = self.telegram.update_settings(
             chat_id=chat_id, enabled=enabled, cooldown_sec=cooldown_sec,
         )
+
+        # Aplicar al listener si existe.
+        if self.telegram_listener is not None:
+            self.telegram_listener.update_settings(
+                chat_id=self.telegram.chat_id,
+                enabled=listener_enabled,
+            )
+            snap["listener_enabled"] = self.telegram_listener.enabled
+        else:
+            snap["listener_enabled"] = False
+
         # Persistir lo que el notifier acepto (no necesariamente lo que se pidio,
         # ej. enabled puede quedar false si no hay token o chat_id).
         try:
-            save_runtime_config({
+            persist = {
                 "telegram_chat_id": self.telegram.chat_id,
                 "telegram_enabled": self.telegram.enabled,
                 "telegram_cooldown_sec": self.telegram.cooldown_sec,
-            })
+            }
+            if self.telegram_listener is not None:
+                persist["telegram_listener_enabled"] = self.telegram_listener.enabled
+            # Preservar last_update_id si existe
+            existing = load_runtime_config()
+            if "telegram_last_update_id" in existing:
+                persist["telegram_last_update_id"] = existing["telegram_last_update_id"]
+            save_runtime_config(persist)
         except Exception as e:
             self.log.warning("No se pudo guardar runtime_config.json: %s", e)
         return snap

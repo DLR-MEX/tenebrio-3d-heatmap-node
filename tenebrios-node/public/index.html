@@ -282,6 +282,12 @@
                         <span>Activar notificaciones</span>
                     </label>
 
+                    <label class="ai-cfg-row ai-cfg-toggle">
+                        <input type="checkbox" id="ai-cfg-listener" />
+                        <span>Permitir consultas al bot (agente IA conversacional)</span>
+                    </label>
+                    <p class="ai-cfg-hint" id="ai-cfg-listener-hint">Si activas esto, el bot responde mensajes que le mandes en lenguaje natural usando la API de Ollama Cloud. Consume tokens del LLM.</p>
+
                     <div id="ai-cfg-msg" class="ai-cfg-msg" aria-live="polite"></div>
 
                     <div class="ai-cfg-actions">

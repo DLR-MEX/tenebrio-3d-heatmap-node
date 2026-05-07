@@ -43,6 +43,8 @@ async def lifespan(app: FastAPI):
         prediction_service=service,
         alert_log=service.alert_log,
     )
+    # Construir listener bidireccional (depende de agent + telegram_bot_token)
+    service.attach_agent(agent)
     try:
         yield
     finally:
@@ -110,7 +112,12 @@ CHAT_ID_PATTERN = re.compile(r"^-?\d{1,20}$")
 async def get_telegram():
     if service is None:
         return JSONResponse({"error": "service not ready"}, status_code=503)
-    return service.telegram.snapshot()
+    snap = service.telegram.snapshot()
+    # Estado del listener bidireccional (puede no existir si no hay bot_token)
+    listener = service.telegram_listener
+    snap["listener_enabled"] = bool(listener and listener.enabled)
+    snap["listener_available"] = listener is not None and bool(agent and agent.ready)
+    return snap
 
 
 @app.post("/api/telegram")
@@ -134,6 +141,7 @@ async def post_telegram(request: Request):
     chat_id = body.get("chat_id")
     enabled = body.get("enabled")
     cooldown = body.get("cooldown_sec")
+    listener_enabled = body.get("listener_enabled")
 
     # Validacion
     if chat_id is not None:
@@ -145,6 +153,8 @@ async def post_telegram(request: Request):
             )
     if enabled is not None and not isinstance(enabled, bool):
         return JSONResponse({"error": "enabled debe ser true/false"}, status_code=400)
+    if listener_enabled is not None and not isinstance(listener_enabled, bool):
+        return JSONResponse({"error": "listener_enabled debe ser true/false"}, status_code=400)
     if cooldown is not None:
         try:
             cooldown = float(cooldown)
@@ -157,6 +167,7 @@ async def post_telegram(request: Request):
         chat_id=chat_id,
         enabled=enabled,
         cooldown_sec=cooldown,
+        listener_enabled=listener_enabled,
     )
 
 
