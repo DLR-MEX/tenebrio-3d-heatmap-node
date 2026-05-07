@@ -502,6 +502,36 @@ class UbidotsHTTP:
         rows.reverse()  # Ubidots devuelve descendente; queremos ascendente
         return rows
 
+    def get_values_range_by_label(
+        self, device_label: str, var_label: str, start_ms: int, end_ms: int,
+        max_points: int = 5000,
+    ) -> list[dict]:
+        """Igual que get_values_range pero usando device label + var label
+        (no requiere var_id). Devuelve la lista cruda de Ubidots para ser
+        consumida por Express (que ya espera ese formato).
+
+        Cada item tiene al menos {timestamp, value}. Ascendente por ts.
+        """
+        page_size = min(max_points, 1000)
+        try:
+            url = (
+                f"/api/v1.6/devices/{device_label}/{var_label}/values/"
+                f"?start={start_ms}&end={end_ms}&page_size={page_size}"
+            )
+            data = self._get(url)
+            results = data.get("results", []) or []
+            # Ubidots devuelve descendente; ordenamos ascendente por ts.
+            results.sort(key=lambda r: r.get("timestamp") or 0)
+            if len(results) > max_points:
+                results = results[:max_points]
+            return results
+        except urllib.error.HTTPError as e:
+            self.log.error("Error fetching range device=%s var=%s: %s", device_label, var_label, e)
+            return []
+        except Exception as e:
+            self.log.error("Error inesperado var=%s: %s", var_label, e)
+            return []
+
 
 # ---------- Buffer ----------
 

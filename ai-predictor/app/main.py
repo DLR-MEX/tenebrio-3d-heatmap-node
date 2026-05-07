@@ -6,6 +6,8 @@ import asyncio
 import json
 import logging
 import re
+import threading
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -99,6 +101,74 @@ async def healthz():
     if service is None:
         return {"ok": False}
     return {"ok": True, "mqtt_connected": service.mqtt_connected}
+
+
+# --- Ubidots history (cache compartido con Express) -----------------------
+# Express tambien necesita histórico para el slider de la vista 3D. En lugar
+# de que ambos pegen a Ubidots HTTP (rate-limit doble), Express consume este
+# endpoint y nosotros cacheamos 60s. Si el sidecar se cae, Express tiene un
+# fallback a Ubidots directo (degradacion graceful — solo se pierde la cache).
+
+_HISTORY_CACHE: dict[tuple[str, int, int], tuple[float, list]] = {}
+_HISTORY_CACHE_TTL = 60.0   # segundos
+_HISTORY_CACHE_MAX_ENTRIES = 200
+_HISTORY_CACHE_LOCK = threading.Lock()
+_LABEL_PATTERN = re.compile(r"^[a-zA-Z0-9_\-]{1,64}$")
+
+
+@app.get("/api/ubidots-history")
+async def get_ubidots_history(var: str, start: int, end: int):
+    """GET /api/ubidots-history?var=<label>&start=<ms>&end=<ms>
+
+    Devuelve la lista cruda de Ubidots: [{timestamp, value, ...}, ...].
+    Cache TTL 60s por (var, start, end). Es seguro porque el dashboard
+    Express normalmente pide rangos discretos (ultimo dia, ultima semana).
+    """
+    if service is None:
+        return JSONResponse({"error": "service not ready"}, status_code=503)
+
+    if not _LABEL_PATTERN.match(var):
+        return JSONResponse({"error": "var label invalido"}, status_code=400)
+    try:
+        start_ms = int(start)
+        end_ms = int(end)
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "start/end deben ser enteros (ms)"}, status_code=400)
+    if end_ms <= start_ms:
+        return JSONResponse({"error": "end debe ser mayor a start"}, status_code=400)
+    # Cota razonable: 31 dias (Ubidots permite mas pero no queremos timeouts)
+    if (end_ms - start_ms) > 31 * 24 * 3600 * 1000:
+        return JSONResponse({"error": "rango maximo 31 dias"}, status_code=400)
+
+    key = (var, start_ms, end_ms)
+    now = time.time()
+
+    # Hit?
+    with _HISTORY_CACHE_LOCK:
+        cached = _HISTORY_CACHE.get(key)
+        if cached and (now - cached[0]) < _HISTORY_CACHE_TTL:
+            return {"results": cached[1], "cached": True}
+
+    # Miss -> pulla a Ubidots (en thread para no bloquear el loop)
+    from app.service import UbidotsHTTP
+    http = UbidotsHTTP(service.cfg.token)
+    try:
+        results = await asyncio.to_thread(
+            http.get_values_range_by_label,
+            service.cfg.device_label, var, start_ms, end_ms,
+        )
+    except Exception as e:
+        logging.getLogger("ubidots.proxy").error("get_values_range_by_label fallo: %s", e)
+        return JSONResponse({"error": str(e)}, status_code=502)
+
+    with _HISTORY_CACHE_LOCK:
+        _HISTORY_CACHE[key] = (now, results)
+        # Cleanup oportunista: si crecio mucho, podamos los mas viejos
+        if len(_HISTORY_CACHE) > _HISTORY_CACHE_MAX_ENTRIES:
+            sorted_items = sorted(_HISTORY_CACHE.items(), key=lambda kv: kv[1][0])
+            for k, _ in sorted_items[: len(_HISTORY_CACHE) - _HISTORY_CACHE_MAX_ENTRIES]:
+                _HISTORY_CACHE.pop(k, None)
+    return {"results": results, "cached": False}
 
 
 # --- Telegram config ------------------------------------------------------
