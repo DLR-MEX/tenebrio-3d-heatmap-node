@@ -12,6 +12,7 @@ import { initTheme } from './theme.js';
 import { initShortcuts } from './shortcuts.js';
 import { initCsvExport } from './export_csv.js';
 import { updateAlertIndicators } from './alert_indicators.js';
+import { initChat } from './chat.js';
 
 const TEMP_VARS = ['t1', 't2', 't3', 't4', 't5', 'tex'];
 const HUM_VARS  = ['h1', 'h2', 'h3', 'h4', 'h5', 'hex'];
@@ -45,6 +46,7 @@ export function initPredictorView() {
         getHistory: (group) => state[group]?.history || [],
         getVars: (group) => group === 'TEMP' ? TEMP_VARS : HUM_VARS,
     });
+    initChat();
 
     window.addEventListener('resize', () => {
         // Solo redibujamos si la vista esta visible; ECharts en contenedor
