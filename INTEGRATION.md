@@ -200,6 +200,26 @@ Los cambios se aplican al instante (hot-reload) y se persisten en `ai-predictor/
 | POST | `/api/predictor/telegram` | Acepta `{chat_id?, enabled?, cooldown_sec?}`. Persiste a `runtime_config.json` |
 | POST | `/api/predictor/telegram/test` | Manda un mensaje de prueba al chat configurado |
 
+## Personalización (white-label)
+
+Los colores de marca están centralizados en `:root` al inicio de `tenebrios-node/public/css/styles.css`:
+
+```css
+:root {
+  --ai-accent:        #E8B830;   /* Dorado de marca */
+  --ai-bg-base:       #1a2630;   /* Fondo principal */
+  --ai-bg-panel:      #243B4A;   /* Paneles, headers */
+  --ai-border:        #3a5a6a;
+  --ai-text:          #e8e0d8;
+  --ai-text-muted:    #8aa0b0;
+  --ai-text-dim:      #607888;
+}
+```
+
+Cambiar estos valores rebrandea **toda la app** (vista 3D + vista IA) sin tocar reglas individuales. Si solo se quiere personalizar una vista en particular, sobreescribir con un selector más específico (`.ai-dashboard { --ai-accent: ... }`).
+
+Los colores semánticos (`--ai-state-ok`, `--ai-state-warn`, `--ai-state-danger`) **no** se recomiendan cambiar — siguen convención universal verde/naranja/rojo.
+
 ## Seguridad
 
 - ✅ Sidecar Python solo escucha en `127.0.0.1:8000`

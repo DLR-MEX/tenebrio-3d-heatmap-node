@@ -180,6 +180,8 @@
                 <div class="ai-meta-item"><span>device</span><span id="ai-device-label">—</span></div>
                 <div class="ai-meta-item"><span id="ai-status-dot" class="ai-status-dot"></span><span id="ai-status-text">conectando…</span></div>
                 <div class="ai-meta-item"><span>last update</span><span id="ai-last-update">—</span></div>
+                <button id="ai-theme-toggle" class="ai-theme-toggle" title="Cambiar a modo claro" aria-label="Alternar tema claro/oscuro" aria-pressed="false">☀</button>
+                <button id="ai-sound-toggle" class="ai-sound-toggle" title="Alternar sonido de alerta" aria-label="Alternar sonido de alerta" aria-pressed="true">🔔</button>
                 <button id="ai-cfg-trigger" class="ai-cfg-trigger" title="Configurar alertas Telegram" aria-label="Configurar alertas Telegram">⚙</button>
             </div>
         </header>
@@ -189,7 +191,10 @@
                 <div class="ai-section-head">
                     <h2>Temperatura</h2>
                     <span class="ai-section-sub">6 sensores · ventana 30 min · horizonte +3 min</span>
-                    <span id="ai-buffer-temp" class="ai-buffer-chip"></span>
+                    <div class="ai-section-actions">
+                        <button class="ai-export-btn" data-group="TEMP" title="Descargar histórico en memoria como CSV">📥 CSV</button>
+                        <span id="ai-buffer-temp" class="ai-buffer-chip"></span>
+                    </div>
                 </div>
                 <div id="ai-cards-temp" class="ai-cards-grid"></div>
                 <div class="ai-chart-card">
@@ -208,7 +213,10 @@
                 <div class="ai-section-head">
                     <h2>Humedad</h2>
                     <span class="ai-section-sub">6 sensores · ventana 30 min · horizonte +3 min</span>
-                    <span id="ai-buffer-hum" class="ai-buffer-chip"></span>
+                    <div class="ai-section-actions">
+                        <button class="ai-export-btn" data-group="HUM" title="Descargar histórico en memoria como CSV">📥 CSV</button>
+                        <span id="ai-buffer-hum" class="ai-buffer-chip"></span>
+                    </div>
                 </div>
                 <div id="ai-cards-hum" class="ai-cards-grid"></div>
                 <div class="ai-chart-card">
@@ -280,6 +288,24 @@
                     </div>
                 </form>
             </div>
+        </div>
+    </div>
+
+    <!-- Modal de atajos de teclado (cheat sheet). Se abre con ?. -->
+    <div id="ai-shortcuts-modal" class="ai-cfg-modal hidden" role="dialog" aria-modal="true" aria-labelledby="ai-shortcuts-title">
+        <div class="ai-cfg-card" style="max-width: 380px;">
+            <div class="ai-cfg-head">
+                <h3 id="ai-shortcuts-title">Atajos de teclado</h3>
+                <button id="ai-shortcuts-close" class="ai-cfg-close" aria-label="Cerrar">✕</button>
+            </div>
+            <table class="ai-shortcuts-table">
+                <tr><td><kbd>V</kbd></td><td>Cambiar vista 3D ↔ IA</td></tr>
+                <tr><td><kbd>T</kbd></td><td>Configurar Telegram (en vista IA)</td></tr>
+                <tr><td><kbd>M</kbd></td><td>Silenciar / activar sonido alerta</td></tr>
+                <tr><td><kbd>D</kbd></td><td>Modo demo (oculta header)</td></tr>
+                <tr><td><kbd>?</kbd></td><td>Mostrar / ocultar este panel</td></tr>
+                <tr><td><kbd>Esc</kbd></td><td>Salir de modo inmersión / cerrar modal</td></tr>
+            </table>
         </div>
     </div>
 

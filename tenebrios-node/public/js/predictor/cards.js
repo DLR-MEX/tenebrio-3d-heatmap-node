@@ -2,6 +2,8 @@
 // y mini-sparkline con historial reciente. Portado de app/static/app.js
 // del proyecto Modelos_Tenebrios, adaptado a la paleta de Danny.
 
+import { playDanger } from './alert_sound.js';
+
 const fmt = (n, d = 2) => Number.isFinite(n) ? n.toFixed(d) : '—';
 
 // Almacen de instancias ECharts por sensor (para no recrearlas cada update)
@@ -13,19 +15,21 @@ export function buildCards(group, vars, hues) {
     root.innerHTML = '';
     vars.forEach((v, i) => {
         const card = document.createElement('div');
-        card.className = 'ai-sensor';
+        // Arranca en estado "loading" — los placeholders muestran shimmer
+        // hasta que llegue el primer SSE/snapshot con datos para este sensor.
+        card.className = 'ai-sensor loading';
         card.style.setProperty('--hue', hues[i]);
         card.dataset.var = v;
         card.innerHTML = `
             <div class="ai-sensor-row">
                 <span class="ai-sensor-label">${v}</span>
-                <span class="ai-sensor-delta flat" data-role="delta">—</span>
+                <span class="ai-sensor-delta flat skeleton skeleton-pill" data-role="delta">&nbsp;</span>
             </div>
-            <div class="ai-sensor-value" data-role="value">—</div>
+            <div class="ai-sensor-value skeleton skeleton-value" data-role="value">&nbsp;</div>
             <div class="ai-sensor-pred">
-                <span class="arrow">→</span><span data-role="pred">—</span><span class="pred-suffix">+3min</span>
+                <span class="arrow">→</span><span class="skeleton skeleton-pred" data-role="pred">&nbsp;</span><span class="pred-suffix">+3min</span>
             </div>
-            <div class="ai-sensor-status unknown" data-role="status">—</div>
+            <div class="ai-sensor-status unknown skeleton skeleton-pill" data-role="status">&nbsp;</div>
             <div class="ai-sensor-spark" data-role="spark"></div>
         `;
         root.appendChild(card);
@@ -42,6 +46,14 @@ export function updateCard(group, vars, idx, current, predicted, alerts, history
     const delta = pred - cur;
     const a = alerts?.[v] || { current: 'unknown', predicted: 'unknown' };
 
+    // Una vez llega data, removemos los skeletons (idempotente).
+    if (card.classList.contains('loading')) {
+        card.classList.remove('loading');
+        card.querySelectorAll('.skeleton').forEach((el) => {
+            el.classList.remove('skeleton', 'skeleton-pill', 'skeleton-value', 'skeleton-pred');
+        });
+    }
+
     card.querySelector('[data-role="value"]').textContent = `${fmt(cur)}${unit}`;
     card.querySelector('[data-role="pred"]').textContent = `${fmt(pred)}${unit}`;
 
@@ -55,8 +67,19 @@ export function updateCard(group, vars, idx, current, predicted, alerts, history
     // Estado: marca card y valor segun la clasificacion del backend.
     // - data-cur-state: estado actual (red border si abnormal hoy)
     // - data-pred-state: estado +3min (red en valor predicho si va a ser abnormal)
+    const prevCurState = card.dataset.curState;
     card.dataset.curState = a.current;
     card.dataset.predState = a.predicted;
+
+    // Si el sensor TRANSITA a PELIGRO (no estaba abnormal antes), suena.
+    // Excluye el primer frame post-loading (prevCurState undefined o '')
+    // para no disparar sonido al cargar la pagina con sensores ya en alerta.
+    if (
+        a.current === 'abnormal' &&
+        prevCurState && prevCurState !== 'abnormal' && prevCurState !== 'unknown'
+    ) {
+        playDanger();
+    }
 
     // Pill de texto debajo del valor predicho. Las cuatro variantes:
     //   - PELIGRO        (rojo)    : valor actual fuera de rango

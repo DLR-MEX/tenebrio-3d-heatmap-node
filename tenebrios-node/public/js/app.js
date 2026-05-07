@@ -44,9 +44,13 @@ window.addEventListener('DOMContentLoaded', async () => {
     setInterval(fetchData, REFRESH_MS);
 });
 
-// Alternancia entre vista 3D y vista IA. Solo cambia visibilidad de
-// contenedores; el motor 3D y el predictor siguen vivos en background
-// para que cambiar de vista sea instantáneo y no perdamos historial.
+// Alternancia entre vista 3D y vista IA con fade cruzado de ~280ms.
+// Ambos contenedores ocupan el mismo espacio (CSS); la animacion solo
+// alterna opacity + pointer-events. El motor 3D y el predictor siguen
+// vivos en background para que cambiar de vista sea instantaneo y
+// no perdamos historial.
+const VIEW_FADE_MS = 280;
+
 function setupViewToggle() {
     const buttons = document.querySelectorAll('.view-toggle button');
     const view3d = document.getElementById('view-3d');
@@ -56,17 +60,37 @@ function setupViewToggle() {
     buttons.forEach((btn) => {
         btn.addEventListener('click', () => {
             const target = btn.dataset.view;
+            // Si ya estamos en esa vista, no hacemos nada (evita re-trigger
+            // de animacion y resize innecesarios).
+            if (btn.classList.contains('active')) return;
+
             buttons.forEach((b) => b.classList.toggle('active', b.dataset.view === target));
             const showAi = target === 'view-ai';
-            view3d.classList.toggle('hidden', showAi);
-            viewAi.classList.toggle('hidden', !showAi);
-            if (showAi) {
-                activatePredictorView();
-            } else {
-                deactivatePredictorView();
-                // Forzar resize del canvas Babylon al volver del modo IA
-                setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
-            }
+
+            // Fase 1: fade-out de la vista actual
+            const outgoing = showAi ? view3d : viewAi;
+            const incoming = showAi ? viewAi : view3d;
+            outgoing.classList.add('view-fading-out');
+
+            setTimeout(() => {
+                outgoing.classList.add('hidden');
+                outgoing.classList.remove('view-fading-out');
+                incoming.classList.remove('hidden');
+                incoming.classList.add('view-fading-in');
+
+                // Fase 2: la entrante hace su fade-in
+                requestAnimationFrame(() => {
+                    incoming.classList.remove('view-fading-in');
+                });
+
+                if (showAi) {
+                    activatePredictorView();
+                } else {
+                    deactivatePredictorView();
+                    // Forzar resize del canvas Babylon al volver del modo IA
+                    window.dispatchEvent(new Event('resize'));
+                }
+            }, VIEW_FADE_MS);
         });
     });
 }
