@@ -822,7 +822,8 @@ body.immersive #scene-container {
     border-color: var(--ai-accent);
     transform: rotate(45deg);
 }
-.ai-sound-toggle:hover {
+.ai-sound-toggle:hover,
+.ai-theme-toggle:hover {
     background: var(--ai-accent);
     color: var(--ai-bg-base);
     border-color: var(--ai-accent);
@@ -832,6 +833,69 @@ body.immersive #scene-container {
     opacity: 0.7;
 }
 .ai-sound-toggle.muted:hover { opacity: 1; }
+
+/* El toggle de tema reusa el estilo de los otros botones — ya cubierto
+   por la regla compartida arriba (.ai-cfg-trigger, .ai-sound-toggle). */
+.ai-theme-toggle { /* hereda dimensiones de la regla compartida */ }
+
+/* ==================================================================
+   Light mode (SOLO vista IA). Sobreescribe las CSS vars dentro del
+   contenedor .ai-dashboard cuando data-theme="light". La vista 3D de
+   Danny no se ve afectada — sus estilos viven fuera de .ai-dashboard.
+   ================================================================== */
+.ai-dashboard[data-theme="light"] {
+    --ai-bg-base:    #f4f6f9;
+    --ai-bg-panel:   #ffffff;
+    --ai-border:     #d8dde4;
+    --ai-text:       #1a2630;
+    --ai-text-muted: #4a5568;
+    --ai-text-dim:   #94a0ad;
+
+    /* El gradient del background tiene rgba blancos hardcoded que en light
+       no contribuyen casi — los sobreescribimos para mantener la sensacion. */
+    background:
+        radial-gradient(900px 450px at 80% -10%, rgba(232,184,48,0.10), transparent 60%),
+        radial-gradient(700px 400px at 5% 100%, rgba(56,189,248,0.06), transparent 60%),
+        var(--ai-bg-base) !important;
+    color: var(--ai-text);
+}
+
+/* Header IA en light: fondo blanco translucido en vez de panel oscuro */
+.ai-dashboard[data-theme="light"] .ai-header {
+    background: rgba(255,255,255,0.85);
+    border-bottom: 1px solid var(--ai-border);
+}
+.ai-dashboard[data-theme="light"] .ai-brand-title { color: #1a2630; }
+.ai-dashboard[data-theme="light"] .ai-meta-item span:last-child { color: #1a2630; }
+
+/* Cards y chart card: fondo blanco con sombra suave en vez del gradiente
+   semi-transparente que se ve mal sobre fondo claro. */
+.ai-dashboard[data-theme="light"] .ai-sensor,
+.ai-dashboard[data-theme="light"] .ai-chart-card {
+    background: #ffffff;
+    border: 1px solid var(--ai-border);
+    box-shadow: 0 1px 3px rgba(15,23,42,0.05), 0 1px 2px rgba(15,23,42,0.04);
+}
+.ai-dashboard[data-theme="light"] .ai-sensor:hover {
+    border-color: var(--ai-accent);
+    box-shadow: 0 4px 12px rgba(232,184,48,0.18);
+}
+
+/* Section h2 — en dark blanco, en light gris oscuro para legibilidad */
+.ai-dashboard[data-theme="light"] .ai-section-head h2 { color: #1a2630; }
+
+/* Sensor value — en dark es blanco puro, en light gris oscuro */
+.ai-dashboard[data-theme="light"] .ai-sensor-value { color: #1a2630; }
+
+/* Buffer chip y status pill unknown en light */
+.ai-dashboard[data-theme="light"] .ai-buffer-chip {
+    background: rgba(0,0,0,0.04);
+    border-color: var(--ai-border);
+}
+.ai-dashboard[data-theme="light"] .ai-sensor-status.unknown {
+    background: rgba(0,0,0,0.04);
+    border-color: var(--ai-border);
+}
 
 .ai-cfg-modal {
     position: fixed; inset: 0;
