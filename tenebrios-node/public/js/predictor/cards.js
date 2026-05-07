@@ -71,14 +71,21 @@ export function updateCard(group, vars, idx, current, predicted, alerts, history
     card.dataset.curState = a.current;
     card.dataset.predState = a.predicted;
 
-    // Si el sensor TRANSITA a PELIGRO (no estaba abnormal antes), suena.
+    // Si el sensor TRANSITA a PELIGRO (no estaba abnormal antes), suena
+    // y la card hace una sacudida para captar la mirada.
     // Excluye el primer frame post-loading (prevCurState undefined o '')
-    // para no disparar sonido al cargar la pagina con sensores ya en alerta.
+    // para no disparar al cargar la pagina con sensores ya en alerta.
     if (
         a.current === 'abnormal' &&
         prevCurState && prevCurState !== 'abnormal' && prevCurState !== 'unknown'
     ) {
         playDanger();
+        card.classList.remove('ai-shake'); // reinicia la animacion
+        // Force reflow para que el remove + add re-dispare el keyframe
+        // eslint-disable-next-line no-unused-expressions
+        void card.offsetWidth;
+        card.classList.add('ai-shake');
+        setTimeout(() => card.classList.remove('ai-shake'), 700);
     }
 
     // Pill de texto debajo del valor predicho. Las cuatro variantes:
@@ -86,23 +93,36 @@ export function updateCard(group, vars, idx, current, predicted, alerts, history
     //   - Alerta +3min   (naranja) : actual ok pero predicho fuera de rango
     //   - Normal         (verde)   : ambos dentro
     //   - —              (gris)    : sin clasificar (sin datos aun)
+    // Lleva un icono emoji al inicio (🚨/⚠/✓) para que sea OBVIO sin leer.
     const statusEl = card.querySelector('[data-role="status"]');
     if (statusEl) {
-        let label, cls;
+        let label, cls, icon;
         if (a.current === 'abnormal') {
+            icon = '🚨';
             label = 'PELIGRO';
             cls = 'danger';
         } else if (a.predicted === 'abnormal') {
+            icon = '⚠';
             label = 'Alerta +3min';
             cls = 'warn';
         } else if (a.current === 'unknown' || a.predicted === 'unknown') {
+            icon = '';
             label = '—';
             cls = 'unknown';
         } else {
+            icon = '✓';
             label = 'Normal';
             cls = 'normal';
         }
-        statusEl.textContent = label;
+        // textContent + estructura segura (sin innerHTML para evitar XSS)
+        statusEl.textContent = '';
+        if (icon) {
+            const iconEl = document.createElement('span');
+            iconEl.className = 'ai-status-icon';
+            iconEl.textContent = icon;
+            statusEl.appendChild(iconEl);
+        }
+        statusEl.appendChild(document.createTextNode(label));
         statusEl.classList.remove('normal', 'warn', 'danger', 'unknown');
         statusEl.classList.add(cls);
     }

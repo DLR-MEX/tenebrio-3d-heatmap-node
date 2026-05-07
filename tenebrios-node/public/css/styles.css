@@ -707,50 +707,159 @@ body.immersive #scene-container {
 /* Caso especifico: ahora ok, predicho abnormal -> warning naranja en card */
 .ai-sensor[data-cur-state="ok"][data-pred-state="abnormal"] {
     border-color: #f59e0b;
+    background: linear-gradient(180deg, rgba(245,158,11,0.06), rgba(245,158,11,0.02));
     box-shadow: inset 0 0 0 1px rgba(245,158,11,0.20);
+}
+
+/* Card en PELIGRO: tinte rojo al fondo (no solo borde) para que sea
+   imposible ignorar incluso al echar un vistazo rapido al grid. */
+.ai-sensor[data-cur-state="abnormal"] {
+    background: linear-gradient(180deg, rgba(239,68,68,0.18) 0%, rgba(239,68,68,0.08) 100%) !important;
+    border-color: rgba(239,68,68,0.55) !important;
+    box-shadow:
+        inset 0 0 0 1px rgba(239,68,68,0.30),
+        0 0 24px rgba(239,68,68,0.14);
+}
+.ai-sensor[data-cur-state="abnormal"]::before {
+    background: #ef4444 !important;
+    opacity: 1 !important;
+    width: 3px;
+    box-shadow: 0 0 8px rgba(239,68,68,0.6);
+}
+.ai-sensor[data-cur-state="abnormal"] .ai-sensor-value {
+    color: #fecaca;
+    text-shadow: 0 0 14px rgba(239,68,68,0.45);
+}
+.ai-sensor[data-cur-state="abnormal"] .ai-sensor-label {
+    color: #fca5a5;
+}
+
+/* Sacudida una vez al transitar de ok -> abnormal. La clase la pone
+   cards.js y se quita despues de 700ms. */
+.ai-shake {
+    animation: ai-shake 0.55s cubic-bezier(.36,.07,.19,.97) both;
+}
+@keyframes ai-shake {
+    0%, 100% { transform: translateX(0); }
+    10%, 30%, 50%, 70%, 90% { transform: translateX(-6px); }
+    20%, 40%, 60%, 80%      { transform: translateX(6px); }
+}
+
+/* Banner por seccion (TEMP/HUM): muestra los sensores en peligro con
+   sus valores. Se oculta cuando todo esta ok. */
+.ai-alert-banner {
+    display: none;
+    margin: 4px 0 6px;
+    padding: 10px 14px;
+    border-radius: 10px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    line-height: 1.5;
+    letter-spacing: 0.02em;
+}
+.ai-alert-banner.visible { display: block; }
+.ai-alert-banner.danger {
+    background: linear-gradient(90deg, rgba(239,68,68,0.22), rgba(239,68,68,0.08));
+    color: #fecaca;
+    border: 1px solid rgba(239,68,68,0.55);
+    box-shadow: 0 0 18px rgba(239,68,68,0.18);
+    animation: ai-pulse-danger 1.4s ease-in-out infinite;
+}
+.ai-alert-banner.warn {
+    background: linear-gradient(90deg, rgba(245,158,11,0.18), rgba(245,158,11,0.06));
+    color: #fde68a;
+    border: 1px solid rgba(245,158,11,0.50);
+}
+
+/* Contador de alertas en el boton "🤖 IA +3min" del header global.
+   Visible incluso cuando el usuario esta en la vista 3D — sabe que
+   algo esta mal sin tener que cambiar de vista. */
+.view-toggle button.has-alerts {
+    /* Sutil resplandor rojo en el boton mientras hay alertas */
+    box-shadow: 0 0 0 2px rgba(239,68,68,0.45) inset;
+}
+.view-toggle button.has-alerts:not(.active) {
+    background: rgba(239,68,68,0.18);
+    color: #fecaca;
+    animation: ai-pulse-soft 1.6s ease-in-out infinite;
+}
+@keyframes ai-pulse-soft {
+    0%, 100% { box-shadow: 0 0 0 2px rgba(239,68,68,0.45) inset, 0 0 0 0 rgba(239,68,68,0.0); }
+    50%      { box-shadow: 0 0 0 2px rgba(239,68,68,0.55) inset, 0 0 0 6px rgba(239,68,68,0.0); }
+}
+.ai-toggle-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 16px;
+    padding: 0 6px;
+    margin-left: 6px;
+    border-radius: 999px;
+    background: #ef4444;
+    color: #fff;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 0.55rem;
+    font-weight: 800;
+    letter-spacing: 0;
+    text-transform: none;
+    line-height: 1;
+    box-shadow: 0 0 8px rgba(239,68,68,0.5);
 }
 
 /* Pill de texto del estado (Normal / Alerta +3min / PELIGRO).
    Va debajo del valor predicho, antes de la sparkline. */
 .ai-sensor-status {
-    margin-top: 8px;
+    margin-top: 10px;
     display: inline-flex;
     align-items: center;
-    padding: 3px 9px;
+    gap: 5px;
+    padding: 5px 12px;
     border-radius: 999px;
     font-family: 'JetBrains Mono', ui-monospace, monospace;
-    font-size: 0.55rem;
+    font-size: 0.75rem;
     font-weight: 700;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
     line-height: 1;
     transition: background 0.25s, color 0.25s, border-color 0.25s;
 }
+.ai-sensor-status .ai-status-icon {
+    font-size: 0.95rem;
+    line-height: 1;
+    margin-top: -1px;
+}
 .ai-sensor-status.normal {
-    background: rgba(52,211,153,0.10);
+    background: rgba(52,211,153,0.12);
     color: #86efac;
-    border: 1px solid rgba(52,211,153,0.25);
+    border: 1px solid rgba(52,211,153,0.30);
 }
 .ai-sensor-status.warn {
-    background: rgba(245,158,11,0.14);
+    background: rgba(245,158,11,0.18);
     color: #fbbf24;
-    border: 1px solid rgba(245,158,11,0.35);
+    border: 1px solid rgba(245,158,11,0.45);
+    animation: ai-pulse-warn 2.2s ease-in-out infinite;
 }
 .ai-sensor-status.danger {
-    background: rgba(239,68,68,0.16);
-    color: #fca5a5;
-    border: 1px solid rgba(239,68,68,0.45);
-    /* Latido sutil para llamar la atencion sin saturar */
-    animation: ai-pulse-danger 1.6s ease-in-out infinite;
+    background: rgba(239,68,68,0.22);
+    color: #fecaca;
+    border: 1px solid rgba(239,68,68,0.6);
+    /* Latido fuerte para que sea imposible ignorarlo */
+    animation: ai-pulse-danger 1.4s ease-in-out infinite;
+    text-shadow: 0 0 12px rgba(239,68,68,0.45);
 }
 .ai-sensor-status.unknown {
     background: rgba(255,255,255,0.04);
-    color: #607888;
+    color: var(--ai-text-dim);
     border: 1px solid var(--ai-border);
 }
 @keyframes ai-pulse-danger {
-    0%, 100% { box-shadow: 0 0 0 0   rgba(239,68,68,0.0); }
-    50%      { box-shadow: 0 0 0 6px rgba(239,68,68,0.0); background: rgba(239,68,68,0.24); }
+    0%, 100% { box-shadow: 0 0 0 0    rgba(239,68,68,0.0); background: rgba(239,68,68,0.22); }
+    50%      { box-shadow: 0 0 0 10px rgba(239,68,68,0.0); background: rgba(239,68,68,0.42); }
+}
+@keyframes ai-pulse-warn {
+    0%, 100% { box-shadow: 0 0 0 0   rgba(245,158,11,0.0); }
+    50%      { box-shadow: 0 0 0 7px rgba(245,158,11,0.0); }
 }
 
 /* ==================================================================

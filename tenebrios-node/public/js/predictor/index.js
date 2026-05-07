@@ -11,6 +11,7 @@ import { initAlertSound } from './alert_sound.js';
 import { initTheme } from './theme.js';
 import { initShortcuts } from './shortcuts.js';
 import { initCsvExport } from './export_csv.js';
+import { updateAlertIndicators } from './alert_indicators.js';
 
 const TEMP_VARS = ['t1', 't2', 't3', 't4', 't5', 'tex'];
 const HUM_VARS  = ['h1', 'h2', 'h3', 'h4', 'h5', 'hex'];
@@ -96,6 +97,12 @@ function applySnapshot(snap) {
             for (let i = 0; i < vars.length; i++) {
                 updateCard(group, vars, i, g.current, g.predicted, g.alerts || {}, state[group].history, unit);
             }
+            updateAlertIndicators(group, {
+                vars,
+                current: g.current,
+                predicted: g.predicted,
+                alerts: g.alerts || {},
+            });
         }
         refreshMainChart(group, vars, state[group].history);
     }
@@ -127,6 +134,12 @@ function applyUpdate(payload) {
         for (let i = 0; i < vars.length; i++) {
             updateCard(group, vars, i, payload.current, payload.predicted, payload.alerts || {}, state[group].history, unit);
         }
+        updateAlertIndicators(group, {
+            vars,
+            current: payload.current,
+            predicted: payload.predicted,
+            alerts: payload.alerts || {},
+        });
         refreshMainChart(group, vars, state[group].history);
         setBufferChip(group, BUFFER_TARGET, BUFFER_TARGET);
         setText('ai-last-update', fmtTime(payload.ts));
