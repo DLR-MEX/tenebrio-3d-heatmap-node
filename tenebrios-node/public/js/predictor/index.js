@@ -10,6 +10,7 @@ import { initTelegramConfig } from './telegram_config.js';
 import { initAlertSound } from './alert_sound.js';
 import { initTheme } from './theme.js';
 import { initShortcuts } from './shortcuts.js';
+import { initCsvExport } from './export_csv.js';
 
 const TEMP_VARS = ['t1', 't2', 't3', 't4', 't5', 'tex'];
 const HUM_VARS  = ['h1', 'h2', 'h3', 'h4', 'h5', 'hex'];
@@ -39,6 +40,10 @@ export function initPredictorView() {
     initAlertSound();
     initTheme();
     initShortcuts();
+    initCsvExport({
+        getHistory: (group) => state[group]?.history || [],
+        getVars: (group) => group === 'TEMP' ? TEMP_VARS : HUM_VARS,
+    });
 
     window.addEventListener('resize', () => {
         // Solo redibujamos si la vista esta visible; ECharts en contenedor

@@ -587,7 +587,6 @@ body.immersive #scene-container {
 }
 .ai-section-sub { font-size: 0.6rem; color: var(--ai-text-muted); }
 .ai-buffer-chip {
-    margin-left: auto;
     font-family: 'JetBrains Mono', ui-monospace, monospace;
     font-size: 0.55rem; color: var(--ai-text-muted);
     padding: 4px 10px; border-radius: 999px;
@@ -595,6 +594,34 @@ body.immersive #scene-container {
     display: none;
 }
 .ai-buffer-chip.visible { display: inline-flex; }
+
+/* Wrapper de acciones a la derecha de cada section header (export + chip) */
+.ai-section-actions {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.ai-export-btn {
+    background: rgba(36,59,74,0.6);
+    color: var(--ai-text-muted);
+    border: 1px solid var(--ai-border);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 0.55rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 0.2s, color 0.2s, border-color 0.2s;
+}
+.ai-export-btn:hover {
+    background: var(--ai-accent);
+    color: var(--ai-bg-base);
+    border-color: var(--ai-accent);
+}
 
 .ai-cards-grid {
     display: grid;
