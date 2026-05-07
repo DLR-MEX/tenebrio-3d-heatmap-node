@@ -180,6 +180,7 @@
                 <div class="ai-meta-item"><span>device</span><span id="ai-device-label">—</span></div>
                 <div class="ai-meta-item"><span id="ai-status-dot" class="ai-status-dot"></span><span id="ai-status-text">conectando…</span></div>
                 <div class="ai-meta-item"><span>last update</span><span id="ai-last-update">—</span></div>
+                <button id="ai-cfg-trigger" class="ai-cfg-trigger" title="Configurar alertas Telegram" aria-label="Configurar alertas Telegram">⚙</button>
             </div>
         </header>
 
@@ -228,6 +229,58 @@
             <span>Modelo dual GRU · entrenado con predicción diferencial</span>
             <span class="ai-footer-version">v0.1</span>
         </footer>
+
+        <!-- Modal de configuración Telegram. Oculto por defecto; se abre con el
+             botón ⚙ del header. NUNCA pide ni muestra el bot_token (vive solo
+             en .env). Si el backend reporta token_configured=false, se muestra
+             un aviso para que el operador edite el .env. -->
+        <div id="ai-cfg-modal" class="ai-cfg-modal hidden" role="dialog" aria-modal="true" aria-labelledby="ai-cfg-title">
+            <div class="ai-cfg-card">
+                <div class="ai-cfg-head">
+                    <h3 id="ai-cfg-title">Alertas Telegram</h3>
+                    <span id="ai-cfg-state" class="ai-cfg-state-badge" data-state="off">—</span>
+                    <button id="ai-cfg-close" class="ai-cfg-close" aria-label="Cerrar">✕</button>
+                </div>
+
+                <div id="ai-cfg-token-warn" class="ai-cfg-warn hidden">
+                    ⚠ El <code>TELEGRAM_BOT_TOKEN</code> no está configurado en <code>ai-predictor/.env</code>.
+                    Sin token, las alertas no pueden enviarse aunque marques <em>activo</em>.
+                </div>
+
+                <form id="ai-cfg-form" class="ai-cfg-form">
+                    <label class="ai-cfg-row">
+                        <span class="ai-cfg-label">Chat ID</span>
+                        <input type="text" id="ai-cfg-chatid" inputmode="numeric"
+                               placeholder="123456789 (positivo) o -100123… (grupo)"
+                               autocomplete="off" />
+                    </label>
+                    <p class="ai-cfg-hint">
+                        Para chat privado: busca <code>@userinfobot</code> en Telegram.
+                        Para grupo: añade <code>@RawDataBot</code> al grupo y mira el campo <code>chat.id</code>.
+                    </p>
+
+                    <label class="ai-cfg-row">
+                        <span class="ai-cfg-label">Cooldown (segundos)</span>
+                        <input type="number" id="ai-cfg-cooldown" min="30" max="3600" step="30" value="300" />
+                    </label>
+                    <p class="ai-cfg-hint">Tiempo mínimo entre alertas del mismo sensor (30–3600 s).</p>
+
+                    <label class="ai-cfg-row ai-cfg-toggle">
+                        <input type="checkbox" id="ai-cfg-enabled" />
+                        <span>Activar notificaciones</span>
+                    </label>
+
+                    <div id="ai-cfg-msg" class="ai-cfg-msg" aria-live="polite"></div>
+
+                    <div class="ai-cfg-actions">
+                        <button type="button" id="ai-cfg-test" class="ai-cfg-btn-secondary">Mensaje de prueba</button>
+                        <span class="ai-cfg-spacer"></span>
+                        <button type="button" id="ai-cfg-cancel" class="ai-cfg-btn-secondary">Cancelar</button>
+                        <button type="submit" class="ai-cfg-btn-primary">Guardar</button>
+                    </div>
+                </form>
+            </div>
+        </div>
     </div>
 
     <div class="footer">TENEBRIOS &mdash; Real-time IoT 3D Volumetric Temperature Monitor</div>

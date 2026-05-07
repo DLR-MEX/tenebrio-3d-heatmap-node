@@ -25,6 +25,7 @@ export function buildCards(group, vars, hues) {
             <div class="ai-sensor-pred">
                 <span class="arrow">→</span><span data-role="pred">—</span><span class="pred-suffix">+3min</span>
             </div>
+            <div class="ai-sensor-status unknown" data-role="status">—</div>
             <div class="ai-sensor-spark" data-role="spark"></div>
         `;
         root.appendChild(card);
@@ -56,6 +57,32 @@ export function updateCard(group, vars, idx, current, predicted, alerts, history
     // - data-pred-state: estado +3min (red en valor predicho si va a ser abnormal)
     card.dataset.curState = a.current;
     card.dataset.predState = a.predicted;
+
+    // Pill de texto debajo del valor predicho. Las cuatro variantes:
+    //   - PELIGRO        (rojo)    : valor actual fuera de rango
+    //   - Alerta +3min   (naranja) : actual ok pero predicho fuera de rango
+    //   - Normal         (verde)   : ambos dentro
+    //   - —              (gris)    : sin clasificar (sin datos aun)
+    const statusEl = card.querySelector('[data-role="status"]');
+    if (statusEl) {
+        let label, cls;
+        if (a.current === 'abnormal') {
+            label = 'PELIGRO';
+            cls = 'danger';
+        } else if (a.predicted === 'abnormal') {
+            label = 'Alerta +3min';
+            cls = 'warn';
+        } else if (a.current === 'unknown' || a.predicted === 'unknown') {
+            label = '—';
+            cls = 'unknown';
+        } else {
+            label = 'Normal';
+            cls = 'normal';
+        }
+        statusEl.textContent = label;
+        statusEl.classList.remove('normal', 'warn', 'danger', 'unknown');
+        statusEl.classList.add(cls);
+    }
 
     // Animacion sutil al actualizar (Danny usa dorado, mantengo coherencia)
     card.dataset.flash = '1';

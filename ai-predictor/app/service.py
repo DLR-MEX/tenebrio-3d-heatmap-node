@@ -68,7 +68,251 @@ def build_alerts(current: dict, predicted: dict, var_names: list[str], group: st
     return out
 
 
+# Etiquetas legibles para los grupos en mensajes Telegram
+GROUP_LABELS = {"TEMP": "Temperatura", "HUM": "Humedad"}
+GROUP_UNITS = {"TEMP": "°C", "HUM": "%"}
+
+# Archivo de configuracion mutable en runtime (persiste cambios hechos
+# desde la UI). Se sobrescribe sobre los valores de .env al inicio. Nunca
+# guarda secretos: el bot_token solo vive en .env.
+RUNTIME_CONFIG_PATH = ROOT / "runtime_config.json"
+RUNTIME_ALLOWED_KEYS = {"telegram_enabled", "telegram_chat_id", "telegram_cooldown_sec"}
+
+
+def load_runtime_config() -> dict:
+    """Lee runtime_config.json. Si no existe o esta corrupto, devuelve {}."""
+    if not RUNTIME_CONFIG_PATH.exists():
+        return {}
+    try:
+        data = json.loads(RUNTIME_CONFIG_PATH.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return {}
+        # Filtrar solo claves permitidas (defensa contra payloads corruptos)
+        return {k: v for k, v in data.items() if k in RUNTIME_ALLOWED_KEYS}
+    except Exception as e:
+        logging.getLogger(__name__).warning("runtime_config.json invalido: %s", e)
+        return {}
+
+
+def save_runtime_config(data: dict) -> None:
+    """Guarda solo claves permitidas. Crea el archivo si no existe."""
+    clean = {k: v for k, v in data.items() if k in RUNTIME_ALLOWED_KEYS}
+    RUNTIME_CONFIG_PATH.write_text(
+        json.dumps(clean, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
 log = logging.getLogger(__name__)
+
+
+# ---------- Telegram ----------
+
+class TelegramNotifier:
+    """
+    Manda alertas a un chat de Telegram cuando un sensor cambia de estado.
+
+    Diseño:
+      - Solo dispara en TRANSICIONES de estado (ok->abnormal o abnormal->ok),
+        nunca en cada prediccion. Esto evita spam.
+      - Cooldown por sensor: si el valor oscila en la frontera del umbral,
+        no manda mensajes hasta que pase `cooldown_sec`.
+      - Send no-bloqueante: dispara un thread daemon por mensaje (volumen
+        bajo, simple). Si Telegram esta caido, solo se pierde el mensaje.
+      - Si esta deshabilitado o sin token, on_alerts() es no-op.
+    """
+
+    TELEGRAM_API = "https://api.telegram.org"
+
+    def __init__(self, bot_token: str, chat_id: str, enabled: bool, cooldown_sec: float = 300.0):
+        self.bot_token = bot_token
+        self.chat_id = chat_id
+        self.enabled = bool(enabled and bot_token and chat_id)
+        self.cooldown_sec = cooldown_sec
+        self._prev_cur: dict[str, str] = {}   # var -> ultimo estado "current"
+        self._prev_pred: dict[str, str] = {}  # var -> ultimo estado "predicted"
+        self._last_sent: dict[tuple[str, str], float] = {}  # (var, kind) -> ts
+        self._lock = threading.Lock()
+        self.log = logging.getLogger("telegram")
+        if self.enabled:
+            self.log.info("Telegram notifier ACTIVO (cooldown=%.0fs)", cooldown_sec)
+        else:
+            self.log.info("Telegram notifier deshabilitado (TELEGRAM_ENABLED=false o credenciales vacias)")
+
+    def on_alerts(
+        self,
+        group: str,
+        var_names: list[str],
+        current_values: dict,
+        predicted_values: dict,
+        alerts: dict,
+    ) -> None:
+        if not self.enabled:
+            return
+        now = time.time()
+        unit = GROUP_UNITS.get(group, "")
+        group_label = GROUP_LABELS.get(group, group)
+
+        if group == "TEMP":
+            lo, hi = TEMP_OPTIMAL_MIN, TEMP_OPTIMAL_MAX
+        else:
+            lo, hi = HUM_OPTIMAL_MIN, HUM_OPTIMAL_MAX
+
+        with self._lock:
+            for var in var_names:
+                cur_state = alerts[var]["current"]
+                pred_state = alerts[var]["predicted"]
+                cur_val = current_values.get(var)
+                pred_val = predicted_values.get(var)
+
+                prev_cur = self._prev_cur.get(var)
+                prev_pred = self._prev_pred.get(var)
+                self._prev_cur[var] = cur_state
+                self._prev_pred[var] = pred_state
+
+                # 1) PELIGRO inmediato: actual paso a abnormal
+                if cur_state == "abnormal" and prev_cur != "abnormal":
+                    if self._cooldown_ok(var, "current", now):
+                        self._send_async(self._fmt_danger(group_label, var, cur_val, lo, hi, unit))
+                        self._last_sent[(var, "current")] = now
+
+                # 2) Recuperacion: actual paso de abnormal a ok
+                elif cur_state == "ok" and prev_cur == "abnormal":
+                    if self._cooldown_ok(var, "current", now):
+                        self._send_async(self._fmt_recovered(group_label, var, cur_val, unit))
+                        self._last_sent[(var, "current")] = now
+
+                # 3) Alerta anticipada: predicho cambio a abnormal (y actual sigue ok)
+                if cur_state == "ok" and pred_state == "abnormal" and prev_pred != "abnormal":
+                    if self._cooldown_ok(var, "predicted", now):
+                        self._send_async(self._fmt_warn(group_label, var, cur_val, pred_val, lo, hi, unit))
+                        self._last_sent[(var, "predicted")] = now
+
+    def _cooldown_ok(self, var: str, kind: str, now: float) -> bool:
+        last = self._last_sent.get((var, kind))
+        return last is None or (now - last) >= self.cooldown_sec
+
+    def update_settings(
+        self,
+        chat_id: Optional[str] = None,
+        enabled: Optional[bool] = None,
+        cooldown_sec: Optional[float] = None,
+    ) -> dict:
+        """Hot-reload de la config sin reiniciar el servicio.
+        El bot_token NO se acepta aqui — solo se cambia desde .env."""
+        with self._lock:
+            if chat_id is not None:
+                self.chat_id = chat_id.strip()
+            if cooldown_sec is not None:
+                self.cooldown_sec = float(cooldown_sec)
+            if enabled is not None:
+                # enabled solo es efectivo si tenemos token y chat_id
+                self.enabled = bool(enabled and self.bot_token and self.chat_id)
+            else:
+                # Si solo cambio chat_id, recalcular enabled
+                self.enabled = bool(self.enabled and self.bot_token and self.chat_id)
+            self.log.info(
+                "Telegram config actualizada: enabled=%s chat_id=%s cooldown=%.0fs",
+                self.enabled, "***" if self.chat_id else "(vacio)", self.cooldown_sec,
+            )
+            return self.snapshot()
+
+    def snapshot(self) -> dict:
+        """Estado publicable. Nunca expone el bot_token, solo si esta configurado."""
+        return {
+            "enabled": self.enabled,
+            "chat_id": self.chat_id or "",
+            "cooldown_sec": self.cooldown_sec,
+            "token_configured": bool(self.bot_token),
+        }
+
+    def send_test_message(self) -> tuple[bool, str]:
+        """Manda un mensaje de prueba sincronicamente. Devuelve (ok, mensaje)."""
+        if not self.bot_token:
+            return False, "TELEGRAM_BOT_TOKEN no configurado en .env"
+        if not self.chat_id:
+            return False, "chat_id no configurado"
+        try:
+            # Send sincrono para que la UI sepa si funciono
+            url = f"{self.TELEGRAM_API}/bot{self.bot_token}/sendMessage"
+            body = json.dumps({
+                "chat_id": self.chat_id,
+                "text": "✨ *Test* — Tenebris AI Sentinel funcionando.\nEste mensaje confirma que el bot puede escribir en este chat.",
+                "parse_mode": "Markdown",
+                "disable_web_page_preview": True,
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                url, data=body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=8) as r:
+                if getattr(r, "status", 200) >= 300:
+                    return False, f"Telegram respondio status={r.status}"
+            return True, "Mensaje enviado"
+        except urllib.error.HTTPError as e:
+            try:
+                err_body = e.read().decode("utf-8", errors="replace")
+            except Exception:
+                err_body = ""
+            return False, f"HTTP {e.code}: {err_body[:200]}"
+        except Exception as e:
+            return False, f"Error: {e}"
+
+    @staticmethod
+    def _fmt_danger(group_label: str, var: str, value, lo: float, hi: float, unit: str) -> str:
+        v = f"{value:.2f}{unit}" if isinstance(value, (int, float)) else "?"
+        return (
+            f"\U0001F6A8 *PELIGRO* — {group_label} anormal\n"
+            f"Sensor *{var}* fuera de rango: `{v}`\n"
+            f"Rango optimo: {lo:g}–{hi:g} {unit}"
+        )
+
+    @staticmethod
+    def _fmt_warn(group_label: str, var: str, cur, pred, lo: float, hi: float, unit: str) -> str:
+        c = f"{cur:.2f}{unit}" if isinstance(cur, (int, float)) else "?"
+        p = f"{pred:.2f}{unit}" if isinstance(pred, (int, float)) else "?"
+        return (
+            f"⚠️ *Alerta predictiva* — {group_label}\n"
+            f"Sensor *{var}* podria salirse en +3min:\n"
+            f"actual `{c}` -> predicho `{p}`\n"
+            f"Rango optimo: {lo:g}–{hi:g} {unit}"
+        )
+
+    @staticmethod
+    def _fmt_recovered(group_label: str, var: str, value, unit: str) -> str:
+        v = f"{value:.2f}{unit}" if isinstance(value, (int, float)) else "?"
+        return (
+            f"✅ {group_label} normalizado\n"
+            f"Sensor *{var}* regreso al rango: `{v}`"
+        )
+
+    def _send_async(self, text: str) -> None:
+        # Daemon thread: no bloquea el procesamiento MQTT y al apagar el
+        # servicio no impide la salida del proceso.
+        threading.Thread(target=self._send, args=(text,), daemon=True).start()
+
+    def _send(self, text: str) -> None:
+        url = f"{self.TELEGRAM_API}/bot{self.bot_token}/sendMessage"
+        body = json.dumps({
+            "chat_id": self.chat_id,
+            "text": text,
+            "parse_mode": "Markdown",
+            "disable_web_page_preview": True,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            url, data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5) as r:
+                if getattr(r, "status", 200) >= 300:
+                    self.log.warning("Telegram respondio status=%s", r.status)
+        except urllib.error.HTTPError as e:
+            self.log.warning("Telegram HTTP %s: %s", e.code, e.reason)
+        except Exception as e:  # red, timeout, etc.
+            self.log.warning("Telegram envio fallo: %s", e)
 
 
 # ---------- Config ----------
@@ -86,6 +330,10 @@ class Config:
     bucket_timeout_sec: float
     app_host: str
     app_port: int
+    telegram_enabled: bool
+    telegram_bot_token: str
+    telegram_chat_id: str
+    telegram_cooldown_sec: float
 
     @classmethod
     def load(cls) -> "Config":
@@ -108,6 +356,25 @@ class Config:
             bucket_timeout_sec=float(os.getenv("BUCKET_TIMEOUT_SEC", "45")),
             app_host=os.getenv("APP_HOST", "0.0.0.0"),
             app_port=int(os.getenv("APP_PORT", "8000")),
+            telegram_enabled=os.getenv("TELEGRAM_ENABLED", "false").lower() == "true",
+            telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
+            telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip(),
+            telegram_cooldown_sec=float(os.getenv("TELEGRAM_COOLDOWN_SEC", "300")),
+        )
+
+    def with_runtime_overrides(self) -> "Config":
+        """Devuelve una copia con runtime_config.json sobrepuesto al .env.
+        Solo se sobrescriben claves seguras (nunca el bot_token)."""
+        rt = load_runtime_config()
+        if not rt:
+            return self
+        return Config(
+            **{
+                **self.__dict__,
+                "telegram_enabled": bool(rt.get("telegram_enabled", self.telegram_enabled)),
+                "telegram_chat_id": str(rt.get("telegram_chat_id", self.telegram_chat_id)),
+                "telegram_cooldown_sec": float(rt.get("telegram_cooldown_sec", self.telegram_cooldown_sec)),
+            }
         )
 
 
@@ -239,6 +506,16 @@ class PredictionService:
         self.temp_bucket = SampleBucket(TEMP_VARS, cfg.bucket_timeout_sec)
         self.hum_bucket = SampleBucket(HUM_VARS, cfg.bucket_timeout_sec)
 
+        # Aplicar runtime_config.json (cambios persistidos desde la UI)
+        # encima de los valores de .env. El bot_token nunca se sobrescribe.
+        effective_cfg = cfg.with_runtime_overrides()
+        self.telegram = TelegramNotifier(
+            bot_token=cfg.telegram_bot_token,  # siempre del .env
+            chat_id=effective_cfg.telegram_chat_id,
+            enabled=effective_cfg.telegram_enabled,
+            cooldown_sec=effective_cfg.telegram_cooldown_sec,
+        )
+
         # estado compartido
         self._state_lock = threading.Lock()
         self.latest: dict[str, dict] = {
@@ -341,6 +618,28 @@ class PredictionService:
         self.client.loop_stop()
         self.client.disconnect()
         self.log.info("Servicio detenido.")
+
+    def update_telegram_settings(
+        self,
+        chat_id: Optional[str] = None,
+        enabled: Optional[bool] = None,
+        cooldown_sec: Optional[float] = None,
+    ) -> dict:
+        """Actualiza el notifier en memoria Y persiste a runtime_config.json."""
+        snap = self.telegram.update_settings(
+            chat_id=chat_id, enabled=enabled, cooldown_sec=cooldown_sec,
+        )
+        # Persistir lo que el notifier acepto (no necesariamente lo que se pidio,
+        # ej. enabled puede quedar false si no hay token o chat_id).
+        try:
+            save_runtime_config({
+                "telegram_chat_id": self.telegram.chat_id,
+                "telegram_enabled": self.telegram.enabled,
+                "telegram_cooldown_sec": self.telegram.cooldown_sec,
+            })
+        except Exception as e:
+            self.log.warning("No se pudo guardar runtime_config.json: %s", e)
+        return snap
 
     def run_blocking(self) -> None:
         """Para uso desde CLI: arranca y bloquea hasta stop()."""
@@ -453,6 +752,18 @@ class PredictionService:
         self._log_prediction(predictor, result, group, alerts)
         if self.cfg.publish_predictions:
             self._publish_prediction(predictor, result)
+        # Notificar a Telegram (solo en transiciones, con cooldown).
+        # Si el notifier esta deshabilitado, esto es un no-op.
+        try:
+            self.telegram.on_alerts(
+                group=group,
+                var_names=predictor.var_names,
+                current_values=result["current"],
+                predicted_values=result["predicted"],
+                alerts=alerts,
+            )
+        except Exception as e:
+            self.log.warning("Telegram notifier fallo: %s", e)
         self._broadcast({
             "type": "prediction",
             "group": group,

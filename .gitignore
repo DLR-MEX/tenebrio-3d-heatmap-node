@@ -76,3 +76,7 @@ __pycache__/
 .ipynb_checkpoints/
 
 # Notebooks: solo ignoramos checkpoints, los .ipynb se commitean
+
+# Config mutable de runtime (chat_id Telegram, etc) — local a cada deploy
+ai-predictor/runtime_config.json
+runtime_config.json

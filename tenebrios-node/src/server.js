@@ -300,24 +300,48 @@ export function createApp() {
     });
   });
 
+  // Helper: proxy JSON simple hacia el sidecar Python. Centraliza el manejo
+  // de errores (sidecar caido -> 503, no se rompe la UI 3D).
+  async function proxyJson(method, path, req, res) {
+    try {
+      const init = { method };
+      if (method === 'POST') {
+        init.headers = { 'Content-Type': 'application/json' };
+        init.body = JSON.stringify(req.body || {});
+      }
+      const upstream = await fetch(`${AI_PREDICTOR_BASE}${path}`, init);
+      const text = await upstream.text();
+      res.status(upstream.status);
+      res.set('Cache-Control', 'no-store');
+      res.set('Content-Type', upstream.headers.get('content-type') || 'application/json');
+      res.send(text);
+    } catch (err) {
+      logger.warn(`predictor ${method} ${path} unreachable: ${err.message}`);
+      res.status(503).json({ error: 'predictor offline' });
+    }
+  }
+
   // --- /api/predictor/state -------------------------------------------------
   // Proxy hacia el sidecar Python (FastAPI). Devuelve el snapshot del
   // predictor (current/predicted/history). Si el sidecar esta caido, el
   // frontend recibe 503 y muestra el indicador "offline" sin romper la UI 3D.
-  app.get('/api/predictor/state', async (req, res) => {
-    try {
-      const upstream = await fetch(`${AI_PREDICTOR_BASE}/api/state`);
-      if (!upstream.ok) {
-        return res.status(upstream.status).json({ error: 'predictor upstream error' });
-      }
-      const data = await upstream.json();
-      res.set('Cache-Control', 'no-store');
-      res.json(data);
-    } catch (err) {
-      logger.warn(`predictor state unreachable: ${err.message}`);
-      res.status(503).json({ error: 'predictor offline' });
-    }
-  });
+  app.get('/api/predictor/state', (req, res) => proxyJson('GET', '/api/state', req, res));
+
+  // --- /api/predictor/telegram (GET) ---------------------------------------
+  // Devuelve { enabled, chat_id, cooldown_sec, token_configured }.
+  // NUNCA incluye el bot_token.
+  app.get('/api/predictor/telegram', (req, res) => proxyJson('GET', '/api/telegram', req, res));
+
+  // --- /api/predictor/telegram (POST) --------------------------------------
+  // Acepta { chat_id?, enabled?, cooldown_sec? }. Rechaza intentos de
+  // inyectar bot_token. Persiste a runtime_config.json en el sidecar.
+  app.post('/api/predictor/telegram', express.json({ limit: '1kb' }), (req, res) =>
+    proxyJson('POST', '/api/telegram', req, res));
+
+  // --- /api/predictor/telegram/test ----------------------------------------
+  // Manda un mensaje de prueba al chat configurado.
+  app.post('/api/predictor/telegram/test', (req, res) =>
+    proxyJson('POST', '/api/telegram/test', req, res));
 
   // --- /api/predictor/stream ------------------------------------------------
   // Proxy SSE: pasa-through del stream del sidecar. Mantiene los eventos
