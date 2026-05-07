@@ -101,9 +101,15 @@ function saveHistory() {
 }
 
 function clearHistory() {
+    if (history.length === 0) return;
+    const confirmed = window.confirm(
+        `¿Borrar los ${history.length} mensajes de esta conversación?\nEsta acción no se puede deshacer.`
+    );
+    if (!confirmed) return;
     history = [];
     saveHistory();
     render();
+    setStatus('listo');
 }
 
 function setStatus(text, state) {
