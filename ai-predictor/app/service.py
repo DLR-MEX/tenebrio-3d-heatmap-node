@@ -367,6 +367,100 @@ class TelegramNotifier:
             self.log.warning("Telegram envio fallo: %s", e)
 
 
+# ---------- Rate-of-change detector ----------
+
+class RateOfChangeDetector:
+    """Capa REACTIVA complementaria al modelo predictivo.
+
+    El GRU predice +3min asumiendo continuidad — saltos abruptos los detecta
+    tarde. Este detector mira la diferencia entre muestras CONSECUTIVAS por
+    sensor y dispara alerta inmediata si supera el umbral.
+
+    No reemplaza al modelo, lo complementa: el modelo capta tendencias suaves;
+    este capta cambios bruscos. Excluye sensores exteriores (tex, hex).
+    """
+
+    # Umbral por grupo. Las muestras llegan ~cada 1 min vía MQTT, asi que estos
+    # son delta entre lecturas consecutivas del mismo sensor.
+    DEFAULT_THRESHOLDS = {"TEMP": 0.5, "HUM": 5.0}
+    # Si la muestra previa es muy vieja, no comparamos (probablemente es el
+    # primer dato tras reconexion MQTT u otra discontinuidad).
+    MAX_GAP_SEC = 5 * 60
+    # Cooldown por sensor para no spammear si el ambiente esta inestable.
+    COOLDOWN_SEC = 5 * 60
+
+    def __init__(self, alert_log: Optional[AlertLog], thresholds: Optional[dict] = None):
+        self.alert_log = alert_log
+        self.thresholds = {**self.DEFAULT_THRESHOLDS, **(thresholds or {})}
+        self._last_seen: dict[str, tuple[float, float]] = {}  # var -> (ts_sec, value)
+        self._last_alert: dict[str, float] = {}  # var -> ts_sec
+        self._lock = threading.Lock()
+        self.log = logging.getLogger("rate-of-change")
+        # callback opcional inyectado por PredictionService
+        self._on_jump = None  # type: Optional[callable]
+
+    def set_jump_callback(self, cb) -> None:
+        """cb(group, var, ts, prev_val, cur_val, delta) -> None
+        Lo invoca el PredictionService para enviar Telegram + broadcast SSE."""
+        self._on_jump = cb
+
+    def observe(self, group: str, var: str, value: float, ts: Optional[float] = None) -> None:
+        """Llamado en cada lectura MQTT. ts en epoch seconds (default: ahora)."""
+        if var in EXTERIOR_VARS:
+            return
+        threshold = self.thresholds.get(group)
+        if threshold is None:
+            return
+        if ts is None:
+            ts = time.time()
+
+        # Captura el estado para evaluar fuera del lock
+        delta = None
+        prev_val = None
+        prev_ts = None
+        with self._lock:
+            prev = self._last_seen.get(var)
+            self._last_seen[var] = (ts, value)
+            if prev is None:
+                return
+            prev_ts, prev_val = prev
+            dt = ts - prev_ts
+            if dt <= 0 or dt > self.MAX_GAP_SEC:
+                return
+            delta = value - prev_val
+            if abs(delta) < threshold:
+                return
+            last_alert = self._last_alert.get(var, 0.0)
+            if (ts - last_alert) < self.COOLDOWN_SEC:
+                return
+            self._last_alert[var] = ts
+
+        # Llegamos aqui: salto detectado fuera de cooldown
+        direction = "subida" if delta > 0 else "bajada"
+        self.log.warning(
+            "SALTO %s en %s (%s): %.2f -> %.2f en %.0fs (delta %+.2f, umbral %.2f)",
+            direction, var, group, prev_val, value, ts - prev_ts, delta, threshold,
+        )
+        # Persistir en alert_log con kind="jump" — el agente IA lo reportara
+        # como evento separado de las transiciones ok<->abnormal.
+        if self.alert_log is not None:
+            self.alert_log.record(
+                ts=ts,
+                group_name=group,
+                var=var,
+                prev_state=f"{prev_val:.2f}",
+                new_state=f"{value:.2f}",
+                kind="jump",
+                value=value,
+                predicted_value=delta,  # delta absoluto en el campo predicted_value
+            )
+        if self._on_jump:
+            try:
+                self._on_jump(group, var, ts, prev_val, value, delta)
+            except Exception as e:
+                self.log.warning("on_jump callback fallo: %s", e)
+
+
 # ---------- Config ----------
 
 @dataclass
@@ -627,6 +721,13 @@ class PredictionService:
         # SQLite local para persistencia de transiciones de estado.
         # Alimenta al agente IA para responder "hubo anomalias ayer?".
         self.alert_log = AlertLog(ROOT / "alert_log.sqlite")
+
+        # Detector de saltos abruptos (capa reactiva complementaria al GRU).
+        # El GRU es buen prediciendo tendencias suaves pero suaviza saltos
+        # — este detector dispara alerta inmediata cuando el delta entre
+        # muestras consecutivas supera el umbral.
+        self.rate_detector = RateOfChangeDetector(alert_log=self.alert_log)
+        self.rate_detector.set_jump_callback(self._on_rate_jump)
 
         # Aplicar runtime_config.json (cambios persistidos desde la UI)
         # encima de los valores de .env. El bot_token nunca se sobrescribe.
@@ -958,13 +1059,43 @@ class PredictionService:
             return
 
         if var in TEMP_VARS:
+            self.rate_detector.observe("TEMP", var, value)
             sample = self.temp_bucket.update(var, value)
             if sample is not None:
                 self._handle_sample(self.temp_predictor, sample, "TEMP")
         elif var in HUM_VARS:
+            self.rate_detector.observe("HUM", var, value)
             sample = self.hum_bucket.update(var, value)
             if sample is not None:
                 self._handle_sample(self.hum_predictor, sample, "HUM")
+
+    def _on_rate_jump(self, group: str, var: str, ts: float, prev_val: float,
+                     cur_val: float, delta: float) -> None:
+        """Disparado por el RateOfChangeDetector. Notifica via SSE y Telegram."""
+        unit = GROUP_UNITS.get(group, "")
+        group_label = GROUP_LABELS.get(group, group)
+        # Broadcast al dashboard (los clientes SSE pueden mostrar un toast)
+        self._broadcast({
+            "type": "jump",
+            "group": group,
+            "var": var,
+            "ts": ts,
+            "prev_value": prev_val,
+            "current_value": cur_val,
+            "delta": delta,
+            "unit": unit,
+        })
+        # Telegram (usa la misma instancia y respeta su enabled)
+        if self.telegram and self.telegram.enabled:
+            arrow = "📈" if delta > 0 else "📉"
+            text = (
+                f"{arrow} *Salto detectado* — {group_label}\n"
+                f"Sensor *{var}*: `{prev_val:.2f}{unit}` → `{cur_val:.2f}{unit}` "
+                f"(Δ `{delta:+.2f}{unit}`)\n"
+                f"_Cambio brusco entre muestras consecutivas — el modelo "
+                f"predictivo no captura saltos de este tamaño._"
+            )
+            self.telegram._send_async(text)
 
     # ---- inferencia + broadcast ----
 

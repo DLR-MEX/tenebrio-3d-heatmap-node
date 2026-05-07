@@ -120,6 +120,10 @@ function applyUpdate(payload) {
         setBufferChip(payload.group, payload.size, payload.target);
         return;
     }
+    if (payload.type === 'jump') {
+        showJumpToast(payload);
+        return;
+    }
     if (payload.type === 'prediction') {
         const group = payload.group;
         const vars = payload.vars;
@@ -186,4 +190,31 @@ function fmtTime(sec) {
     return new Date(sec * 1000).toLocaleTimeString([], {
         hour: '2-digit', minute: '2-digit', second: '2-digit',
     });
+}
+
+// Toast transitorio para eventos jump (rate-of-change). Aparece arriba a la
+// derecha de la vista IA, ~6s. No modal, no bloqueante.
+function showJumpToast(payload) {
+    const arrow = payload.delta >= 0 ? '📈' : '📉';
+    const sign = payload.delta >= 0 ? '+' : '';
+    const unit = payload.unit || '';
+    const text = `${arrow} Salto en ${payload.var}: ${payload.prev_value.toFixed(2)}${unit} → ${payload.current_value.toFixed(2)}${unit} (${sign}${payload.delta.toFixed(2)}${unit})`;
+
+    let host = document.getElementById('ai-jump-toasts');
+    if (!host) {
+        host = document.createElement('div');
+        host.id = 'ai-jump-toasts';
+        host.className = 'ai-jump-toasts';
+        document.getElementById('view-ai')?.appendChild(host);
+    }
+    const toast = document.createElement('div');
+    toast.className = 'ai-jump-toast';
+    toast.textContent = text;
+    host.appendChild(toast);
+    // Animacion entrada y salida
+    requestAnimationFrame(() => toast.classList.add('show'));
+    setTimeout(() => {
+        toast.classList.remove('show');
+        setTimeout(() => toast.remove(), 350);
+    }, 6000);
 }

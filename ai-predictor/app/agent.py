@@ -63,8 +63,18 @@ TRATAMIENTO DE SENSORES EXTERIORES (tex, hex):
 - Solo úsalos como contexto: "afuera hay 42°C, lo cual estresa los aires, pero el
   cuarto se mantiene en rango".
 
-MODELO PREDICTIVO:
-- Dos GRU duales predicen el valor de cada sensor en +3 minutos.
+MODELO PREDICTIVO + DETECTOR DE SALTOS:
+- Dos GRU duales predicen el valor de cada sensor en +3 minutos. Bueno
+  prediciendo tendencias suaves, débil prediciendo cambios bruscos.
+- Capa complementaria reactiva: detector de "rate of change". Si un sensor
+  cambia más de 0.5 °C (TEMP) o 5 % (HUM) entre muestras consecutivas,
+  registra una entrada con kind="jump" en el alert log.
+- get_recent_alerts devuelve dos listas separadas:
+  * "transitions" — cruces de umbral ok<->abnormal
+  * "jumps" — saltos bruscos detectados por el RoC (incluyen from_value,
+    to_value, delta). Son eventos importantes: indican cambios ambientales
+    abruptos (ventilador apagado, puerta abierta, etc.) que el predictivo
+    no anticipa.
 - Cuando un sensor INTERIOR sale del rango óptimo, el sistema registra una TRANSICIÓN.
 
 LIMITACIÓN IMPORTANTE DEL ALERT LOG:
@@ -501,17 +511,32 @@ class AgentService:
             since_ts=since_ts,
             limit=100,
         )
-        # Formato amigable para el LLM
+        # Formato amigable para el LLM. Separamos saltos (kind="jump") del
+        # resto de transiciones — son eventos distintos: jump = cambio brusco
+        # entre muestras consecutivas; transition = cruce de umbral ok<->abnormal.
         formatted = []
+        jumps = []
         for r in rows:
-            formatted.append({
-                "ts_iso": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(r["ts"])),
-                "group": r["group_name"],
-                "var": r["var"],
-                "transition": f'{r["prev_state"]}->{r["new_state"]}',
-                "kind": r["kind"],
-                "value": r["value"],
-            })
+            if r["kind"] == "jump":
+                # En jumps, prev_state/new_state guardan los valores numericos
+                # como string, y predicted_value guarda el delta absoluto.
+                jumps.append({
+                    "ts_iso": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(r["ts"])),
+                    "group": r["group_name"],
+                    "var": r["var"],
+                    "from_value": r["prev_state"],
+                    "to_value": r["new_state"],
+                    "delta": r["predicted_value"],
+                })
+            else:
+                formatted.append({
+                    "ts_iso": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(r["ts"])),
+                    "group": r["group_name"],
+                    "var": r["var"],
+                    "transition": f'{r["prev_state"]}->{r["new_state"]}',
+                    "kind": r["kind"],
+                    "value": r["value"],
+                })
         total = self.alert_log.count(
             group_name=group_filter,
             new_state="abnormal",
@@ -589,6 +614,11 @@ class AgentService:
             "transitions_to_abnormal": total,
             "transitions_returned": len(formatted),
             "transitions": formatted,
+            # Saltos abruptos (rate-of-change detector). Diferentes de las
+            # transiciones de umbral: capturan cambios bruscos de valor entre
+            # muestras consecutivas, que el modelo predictivo no anticipa bien.
+            "jumps_detected": len(jumps),
+            "jumps": jumps,
             "currently_abnormal_interior_sensors": currently_abnormal,
             "alert_log_oldest_ts_iso": log_oldest_iso,
             "alert_log_covers_full_period": log_covers_full_period,

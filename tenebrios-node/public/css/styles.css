@@ -1348,6 +1348,34 @@ body.demo-mode .ai-dashboard { height: 100vh !important; }
     .ai-cfg-btn-primary, .ai-cfg-btn-secondary { flex: 1; padding: 9px 8px; }
 }
 
+/* Jump toasts: notificaciones transitorias de rate-of-change.
+   Aparecen arriba a la derecha de la vista IA y se auto-eliminan a los 6s. */
+.ai-jump-toasts {
+    position: fixed;
+    top: 70px; right: 20px;
+    z-index: 70;
+    display: flex; flex-direction: column; gap: 8px;
+    pointer-events: none;
+}
+.ai-jump-toast {
+    background: linear-gradient(135deg, rgba(245,158,11,0.95), rgba(232,184,48,0.95));
+    color: var(--ai-bg-base);
+    padding: 10px 16px;
+    border-radius: 10px;
+    font-size: 0.85rem;
+    font-weight: 700;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    transform: translateX(120%);
+    opacity: 0;
+    transition: transform 0.32s cubic-bezier(.2,.9,.3,1.2), opacity 0.32s;
+    max-width: 340px;
+    border: 1px solid rgba(0,0,0,0.18);
+}
+.ai-jump-toast.show {
+    transform: translateX(0);
+    opacity: 1;
+}
+
 /* ============================================================
    AI Chat widget (vista IA only)
    Boton flotante 💬 + panel deslizable. Usa misma paleta
