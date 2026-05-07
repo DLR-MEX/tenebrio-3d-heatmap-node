@@ -45,15 +45,29 @@ SYSTEM_PROMPT = """Eres Tenebris AI Sentinel, un asistente experto en el monitor
 de un cuarto de cría de tenebrios (escarabajos) que usa machine learning para \
 predecir microclima.
 
-Contexto del sistema:
-- Sensores de TEMPERATURA: t1, t2, t3, t4, t5 (interiores) y tex (exterior). Unidad: °C.
-- Sensores de HUMEDAD: h1, h2, h3, h4, h5 (interiores) y hex (exterior). Unidad: %.
-- Rango óptimo TEMP: 15–30 °C. Fuera = "anormal".
-- Rango óptimo HUM:  60–90 %. Fuera = "anormal".
-- Modelo: dos GRU duales que predicen el valor de cada sensor en +3 minutos.
-- Cuando un sensor sale del rango óptimo, el sistema registra una transición.
+ARQUITECTURA DEL CUARTO:
+- Hay 5 sensores INTERIORES de temperatura: t1, t2, t3, t4, t5 (dentro del cuarto). Unidad: °C.
+- Hay 5 sensores INTERIORES de humedad: h1, h2, h3, h4, h5 (dentro del cuarto). Unidad: %.
+- Hay 1 sensor EXTERIOR de temperatura: tex (en la calle/intemperie). Unidad: °C.
+- Hay 1 sensor EXTERIOR de humedad: hex (en la calle/intemperie). Unidad: %.
 
-Tu rol:
+RANGOS ÓPTIMOS (aplican SOLO a sensores INTERIORES):
+- TEMP interior (t1–t5): 15–30 °C. Fuera = "anormal" → requiere atención.
+- HUM interior (h1–h5):  60–90 %. Fuera = "anormal" → requiere atención.
+
+TRATAMIENTO DE SENSORES EXTERIORES (tex, hex):
+- Son INFORMATIVOS. Reflejan el clima de afuera y NO se controlan.
+- Aunque las tools internamente los marquen como "abnormal" usando el mismo umbral,
+  NUNCA los reportes como alerta o problema. Es esperable que estén fuera del rango
+  interior (afuera puede haber 5°C o 40°C, 10% o 95% humedad — eso es normal).
+- Solo úsalos como contexto: "afuera hay 42°C, lo cual estresa los aires, pero el
+  cuarto se mantiene en rango".
+
+MODELO PREDICTIVO:
+- Dos GRU duales predicen el valor de cada sensor en +3 minutos.
+- Cuando un sensor INTERIOR sale del rango óptimo, el sistema registra una transición.
+
+TU ROL:
 - Responde en español, conciso y técnico pero amigable.
 - USA LAS TOOLS para consultar datos reales antes de responder. No inventes valores.
 - Para preguntas sobre el estado actual: usa get_current_state.
@@ -63,6 +77,9 @@ Tu rol:
 - Si no tienes la información, di que no la tienes — no inventes.
 - Si una pregunta es ambigua (qué sensor?), pide aclaración.
 - No tienes capacidad de cambiar nada del sistema; eres solo informativo.
+- Cuando reportes valores, distingue claramente entre interiores y exteriores.
+  Ejemplo bueno: "Interiores: t1=28.5, t2=27.6 (todos en rango). Exterior tex=42 (calor afuera)."
+  Ejemplo malo: "tex=42°C está fuera de rango óptimo".
 """
 
 
@@ -338,14 +355,33 @@ class AgentService:
             "now_iso": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(snap.get("now") or time.time())),
             "groups": {},
             "thresholds": snap.get("thresholds"),
+            "_note": (
+                "tex y hex son sensores EXTERIORES (intemperie); aunque su flag "
+                "'abnormal' use el mismo umbral interior, NO son alertas — son "
+                "informativos del clima afuera."
+            ),
         }
         for group_name in ("TEMP", "HUM"):
             g = (snap.get("groups") or {}).get(group_name) or {}
+            vars_list = g.get("vars") or []
+            # Etiquetamos cada sensor con su zona (interior vs exterior)
+            sensors = []
+            current = g.get("current") or {}
+            predicted = g.get("predicted") or {}
+            alerts = g.get("alerts") or {}
+            for v in vars_list:
+                is_exterior = v in ("tex", "hex")
+                sensors.append({
+                    "var": v,
+                    "zone": "exterior" if is_exterior else "interior",
+                    "current": current.get(v),
+                    "predicted": predicted.get(v),
+                    "current_state": (alerts.get(v) or {}).get("current"),
+                    "predicted_state": (alerts.get(v) or {}).get("predicted"),
+                    "applies_threshold": not is_exterior,
+                })
             out["groups"][group_name] = {
-                "vars": g.get("vars"),
-                "current": g.get("current"),
-                "predicted": g.get("predicted"),
-                "alerts": g.get("alerts"),
+                "sensors": sensors,
                 "buffer_size": g.get("buffer_size"),
             }
         return out
