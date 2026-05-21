@@ -285,6 +285,74 @@ class TelegramListener:
         except Exception as e:
             log.warning("sendPhoto fallo: %s", e)
 
+    def send_document(self, pdf_bytes: bytes, filename: str, caption: str = "") -> None:
+        """Envia un PDF via sendDocument (multipart/form-data). Usado por
+        el scheduler para entregar reportes programados al chat configurado.
+        Si chat_id no esta configurado, no hace nada."""
+        if not self.chat_id:
+            log.warning("send_document llamado sin chat_id configurado")
+            return
+        self._send_document(self.chat_id, pdf_bytes, filename, caption)
+
+    def _send_document(self, chat_id: str, pdf_bytes: bytes,
+                        filename: str, caption: str = "") -> None:
+        """Telegram sendDocument con multipart/form-data."""
+        url = f"{TELEGRAM_API}/bot{self.bot_token}/sendDocument"
+        boundary = uuid.uuid4().hex
+        # Caption limit 1024 chars en Telegram
+        caption = _markdown_tables_to_bullets(caption or "")
+        if len(caption) > 1020:
+            caption = caption[:1020] + "..."
+
+        parts = []
+        for field, value in (
+            ("chat_id", chat_id),
+            ("caption", caption),
+            ("parse_mode", "Markdown"),
+        ):
+            parts.append(f"--{boundary}\r\n".encode())
+            parts.append(
+                f'Content-Disposition: form-data; name="{field}"\r\n\r\n'.encode()
+            )
+            parts.append(value.encode("utf-8"))
+            parts.append(b"\r\n")
+        # Documento PDF
+        safe_filename = filename.replace('"', "_")
+        parts.append(f"--{boundary}\r\n".encode())
+        parts.append(
+            f'Content-Disposition: form-data; name="document"; filename="{safe_filename}"\r\n'
+            f"Content-Type: application/pdf\r\n\r\n".encode()
+        )
+        parts.append(pdf_bytes)
+        parts.append(b"\r\n")
+        parts.append(f"--{boundary}--\r\n".encode())
+        body = b"".join(parts)
+
+        req = urllib.request.Request(
+            url, data=body,
+            headers={
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+                "Content-Length": str(len(body)),
+            },
+            method="POST",
+        )
+        # Indicador de "subiendo documento"
+        self._send_chat_action(chat_id, "upload_document")
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                if getattr(r, "status", 200) >= 300:
+                    log.warning("sendDocument status=%s", r.status)
+                else:
+                    log.info("sendDocument OK: %s (%.1fKB)", filename, len(pdf_bytes) / 1024)
+        except urllib.error.HTTPError as e:
+            try:
+                err_body = e.read().decode("utf-8", errors="replace")
+            except Exception:
+                err_body = ""
+            log.warning("sendDocument HTTP %s: %s body=%s", e.code, e.reason, err_body[:200])
+        except Exception as e:
+            log.warning("sendDocument fallo: %s", e)
+
     def _dispatch(self, text: str) -> tuple[str, list[dict]]:
         """Devuelve (reply_text, chart_specs[])."""
         lowered = text.lower().strip()

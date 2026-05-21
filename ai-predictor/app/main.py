@@ -55,10 +55,22 @@ async def lifespan(app: FastAPI):
     try:
         from app.reports.scheduler import ReportScheduler, set_global_scheduler
         jobs_db = Path(__file__).resolve().parent.parent / "reports" / "jobs.sqlite"
+
+        # Telegram sender (Fase 5): si el notifier existe, usamos su metodo
+        # send_document. El scheduler lo invoca cuando deliver_to incluye
+        # 'telegram'. No requiere que el listener bidireccional este activo.
+        def _telegram_sender(pdf_bytes: bytes, filename: str, caption: str) -> None:
+            if service is not None and service.telegram and service.telegram.bot_token:
+                service.telegram.send_document(pdf_bytes, filename, caption)
+            else:
+                logging.getLogger("reports.scheduler").info(
+                    "Schedule queria mandar a Telegram pero notifier no configurado"
+                )
+
         report_scheduler = ReportScheduler(
             db_path=jobs_db,
             generator_fn=_generate_report_sync,  # definido mas abajo
-            telegram_sender=None,  # Fase 5: se conecta despues
+            telegram_sender=_telegram_sender,
         )
         set_global_scheduler(report_scheduler)
         report_scheduler.start()

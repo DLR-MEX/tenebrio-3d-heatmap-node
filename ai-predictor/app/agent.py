@@ -507,6 +507,14 @@ def _tool_schemas() -> list[dict]:
                             "type": "string",
                             "description": "Título personalizado (default auto-generado).",
                         },
+                        "send_to_telegram": {
+                            "type": "boolean",
+                            "description": (
+                                "Si true, también envía el PDF al chat de Telegram "
+                                "configurado. Útil cuando el usuario pide 'mándalo a "
+                                "Telegram' o 'avísame por Telegram'. Default false."
+                            ),
+                        },
                     },
                     "required": [],
                 },
@@ -901,6 +909,28 @@ class AgentService:
 
         report_id = pdf_path.stem
 
+        # Entrega Telegram si el usuario lo pidio
+        sent_to_telegram = False
+        if args.get("send_to_telegram"):
+            try:
+                if self.prediction_service.telegram and self.prediction_service.telegram.bot_token:
+                    summary = {
+                        "transitions_to_abnormal": data["alerts"]["transitions_to_abnormal"],
+                        "jumps_total": data["alerts"]["jumps_total"],
+                    }
+                    caption = (
+                        f"📊 *{title or 'Reporte ejecutivo'}*\n"
+                        f"Periodo: {data['meta']['start_iso']} a {data['meta']['end_iso']}\n"
+                        f"Alertas críticas: {summary['transitions_to_abnormal']} · "
+                        f"Saltos: {summary['jumps_total']}"
+                    )
+                    self.prediction_service.telegram.send_document(
+                        pdf_bytes, pdf_path.name, caption,
+                    )
+                    sent_to_telegram = True
+            except Exception as e:
+                log.warning("send_to_telegram fallo: %s", e)
+
         # Devolvemos al LLM solo metadata — no el contenido del reporte.
         # El _chart_spec equivalente para reports lo manejamos via 'reports'
         # en el response final de chat() (similar a charts).
@@ -916,6 +946,7 @@ class AgentService:
                 "transitions_to_abnormal": data["alerts"]["transitions_to_abnormal"],
                 "jumps_total": data["alerts"]["jumps_total"],
             },
+            "sent_to_telegram": sent_to_telegram,
         }
         return {
             "report_card": report_card,

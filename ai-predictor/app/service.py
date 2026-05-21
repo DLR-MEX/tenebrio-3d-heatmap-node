@@ -376,6 +376,64 @@ class TelegramNotifier:
         except Exception as e:  # red, timeout, etc.
             self.log.warning("Telegram envio fallo: %s", e)
 
+    def send_document(self, pdf_bytes: bytes, filename: str, caption: str = "") -> None:
+        """Envia un documento via sendDocument multipart/form-data. Usado por
+        el ReportScheduler. Bloqueante — el caller decide si usar thread."""
+        if not self.bot_token or not self.chat_id:
+            self.log.warning("send_document sin token/chat_id configurado")
+            return
+        import uuid as _uuid
+        boundary = _uuid.uuid4().hex
+        if len(caption) > 1020:
+            caption = caption[:1020] + "..."
+
+        parts = []
+        for field, value in (
+            ("chat_id", self.chat_id),
+            ("caption", caption),
+            ("parse_mode", "Markdown"),
+        ):
+            parts.append(f"--{boundary}\r\n".encode())
+            parts.append(
+                f'Content-Disposition: form-data; name="{field}"\r\n\r\n'.encode()
+            )
+            parts.append(value.encode("utf-8"))
+            parts.append(b"\r\n")
+        safe_filename = filename.replace('"', "_")
+        parts.append(f"--{boundary}\r\n".encode())
+        parts.append(
+            f'Content-Disposition: form-data; name="document"; filename="{safe_filename}"\r\n'
+            f"Content-Type: application/pdf\r\n\r\n".encode()
+        )
+        parts.append(pdf_bytes)
+        parts.append(b"\r\n")
+        parts.append(f"--{boundary}--\r\n".encode())
+        body = b"".join(parts)
+
+        url = f"{self.TELEGRAM_API}/bot{self.bot_token}/sendDocument"
+        req = urllib.request.Request(
+            url, data=body,
+            headers={
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+                "Content-Length": str(len(body)),
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                if getattr(r, "status", 200) >= 300:
+                    self.log.warning("sendDocument status=%s", r.status)
+                else:
+                    self.log.info("sendDocument OK: %s (%.1fKB)", filename, len(pdf_bytes) / 1024)
+        except urllib.error.HTTPError as e:
+            try:
+                err_body = e.read().decode("utf-8", errors="replace")
+            except Exception:
+                err_body = ""
+            self.log.warning("sendDocument HTTP %s: %s body=%s", e.code, e.reason, err_body[:200])
+        except Exception as e:
+            self.log.warning("sendDocument fallo: %s", e)
+
 
 # ---------- Rate-of-change detector ----------
 
