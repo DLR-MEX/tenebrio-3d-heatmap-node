@@ -74,6 +74,8 @@ async def lifespan(app: FastAPI):
         )
         set_global_scheduler(report_scheduler)
         report_scheduler.start()
+        # Cleanup oportunista de PDFs viejos
+        _cleanup_old_reports()
     except Exception as e:
         logging.getLogger("reports.scheduler").error("No se pudo iniciar scheduler: %s", e)
         report_scheduler = None
@@ -146,6 +148,27 @@ from fastapi.responses import StreamingResponse  # noqa: E402
 REPORTS_DIR = Path(__file__).resolve().parent.parent / "reports" / "output"
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 MAX_REPORT_DAYS = 31
+REPORTS_RETENTION_DAYS = 30  # PDFs viejos se borran al arranque
+
+
+def _cleanup_old_reports() -> int:
+    """Borra PDFs y previews mas viejos que REPORTS_RETENTION_DAYS.
+    Devuelve cuantos archivos borro."""
+    cutoff = time.time() - REPORTS_RETENTION_DAYS * 86400
+    deleted = 0
+    for f in REPORTS_DIR.glob("*"):
+        try:
+            if f.stat().st_mtime < cutoff:
+                f.unlink()
+                deleted += 1
+        except Exception:
+            pass
+    if deleted:
+        logging.getLogger("reports").info(
+            "Cleanup: %d archivos viejos borrados (>%d dias)",
+            deleted, REPORTS_RETENTION_DAYS,
+        )
+    return deleted
 
 
 @app.post("/api/reports/generate")

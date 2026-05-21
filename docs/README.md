@@ -9,6 +9,7 @@
 | Documento | Contenido |
 |---|---|
 | [`AGENTE_IA_CAMBIOS.md`](AGENTE_IA_CAMBIOS.md) | **Cambios añadidos en la rama `feature/agent-ia-conversacional`**: agente conversacional, bot Telegram bidireccional, widget de chat, gráficas inline, detector de saltos, cache Ubidots. Arquitectura, decisiones de diseño y operación. |
+| [`REPORTES.md`](REPORTES.md) | **Reportes ejecutivos PDF**: generación on-demand desde el chat o programada con cron. PDFs de 7-8 páginas con portada estilo dashboard, gráficas, narrativa LLM, entrega Telegram. |
 | [`INTEGRATION.md`](INTEGRATION.md) | Integración del dashboard 3D de Danny con el sidecar Python del predictor IA. Arranque rápido, estructura de archivos, troubleshooting general. |
 
 ### Componentes individuales
@@ -26,5 +27,6 @@
 - **¿Soy nuevo en el proyecto?** → `../README.md` → `INTEGRATION.md` → `AGENTE_IA_CAMBIOS.md`
 - **¿Voy a desplegar en producción?** → `INTEGRATION.md` → `node-scripts-install.md` → `node-requirements.md`
 - **¿Quiero entender el agente IA?** → `AGENTE_IA_CAMBIOS.md` (secciones 2-7)
+- **¿Quiero generar reportes PDF / programarlos?** → `REPORTES.md`
 - **¿Quiero usar/cambiar el predictor GRU?** → `ai-predictor.md`
 - **¿Quiero modificar el dashboard 3D?** → `node-dashboard.md` → `node-changelog.md`

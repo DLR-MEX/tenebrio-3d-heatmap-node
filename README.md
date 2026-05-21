@@ -11,6 +11,7 @@ Migracion del proyecto original Python/Flask/Plotly, ahora con sidecar de IA.
 Toda la documentación detallada vive en **[`docs/`](docs/README.md)**:
 
 - **[Cambios agente IA](docs/AGENTE_IA_CAMBIOS.md)** — agente conversacional, bot Telegram bidireccional, widget de chat, gráficas, detector de saltos
+- **[Reportes ejecutivos PDF](docs/REPORTES.md)** — PDFs on-demand y programados con cron, entrega Telegram
 - **[Integración dashboard + sidecar](docs/INTEGRATION.md)** — arranque rápido, troubleshooting
 - **[Predictor IA](docs/ai-predictor.md)** — modelos GRU, training
 - **[Dashboard 3D](docs/node-dashboard.md)** — heatmap volumétrico, MQTT
