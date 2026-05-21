@@ -9,7 +9,6 @@ page-break-*, paginacion, etc).
 
 from __future__ import annotations
 
-import hashlib
 import io
 import logging
 import time
@@ -115,16 +114,36 @@ def render_pdf(data: dict, charts: dict, commentary: Optional[dict] = None,
 
 def save_pdf(pdf_bytes: bytes, output_dir: Path,
              start_ts: float, end_ts: float) -> Path:
-    """Guarda el PDF con un nombre determinista basado en el periodo.
-    Devuelve la ruta del archivo."""
+    """Guarda el PDF con un nombre ilustrativo basado en el periodo.
+
+    Formato: reporte-tenebrios_<inicio>_a_<fin>.pdf
+      - Periodos de dias completos:  reporte-tenebrios_2026-05-20_a_2026-05-21.pdf
+      - Periodos con hora especifica: reporte-tenebrios_2026-05-20-1430_a_2026-05-21-1430.pdf
+
+    El periodo completo ES el identificador: el mismo rango siempre
+    produce el mismo archivo (determinista, sobrescribe). Solo usa
+    caracteres validos para report_id (letras, numeros, guion, guion-bajo).
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Nombre: YYYY-MM-DD_<hash>.pdf donde hash = primeros 8 chars de sha1
-    # de la combinacion (start, end). Determinista — el mismo periodo
-    # sobrescribe el archivo anterior.
-    date_str = time.strftime("%Y-%m-%d", time.localtime(end_ts))
-    h = hashlib.sha1(f"{start_ts}-{end_ts}".encode()).hexdigest()[:8]
-    filename = f"{date_str}_{h}.pdf"
+    start_lt = time.localtime(start_ts)
+    end_lt = time.localtime(end_ts)
+
+    # Si ambos extremos caen exactamente en medianoche (rango de dias
+    # completos) omitimos la hora — el nombre queda mas limpio.
+    midnight_aligned = (
+        start_lt.tm_hour == 0 and start_lt.tm_min == 0
+        and end_lt.tm_hour == 0 and end_lt.tm_min == 0
+    )
+    if midnight_aligned:
+        fmt = "%Y-%m-%d"
+    else:
+        fmt = "%Y-%m-%d-%H%M"
+
+    start_str = time.strftime(fmt, start_lt)
+    end_str = time.strftime(fmt, end_lt)
+    filename = f"reporte-tenebrios_{start_str}_a_{end_str}.pdf"
+
     out_path = output_dir / filename
     out_path.write_bytes(pdf_bytes)
     return out_path
