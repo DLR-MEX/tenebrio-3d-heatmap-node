@@ -524,6 +524,16 @@ body.immersive #scene-container {
     -webkit-backdrop-filter: blur(10px);
     border-bottom: 1px solid var(--ai-border);
 }
+/* Variante compacta: sin brand (el brand vive en el header global TECHNEBROS).
+   Solo strip de meta + botones. Ahorra ~50px de alto. */
+.ai-header.ai-header-slim {
+    padding: 6px 16px;
+    justify-content: flex-end;
+}
+.ai-header.ai-header-slim .ai-meta {
+    flex: 1;
+    justify-content: flex-end;
+}
 .ai-brand { display: flex; align-items: center; gap: 12px; }
 .ai-brand-mark {
     width: 28px; height: 28px;
@@ -1782,6 +1792,33 @@ body.demo-mode .ai-dashboard { height: 100vh !important; }
 @keyframes ai-chat-bounce {
     0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
     40%           { transform: scale(1);   opacity: 1; }
+}
+
+/* Variante con status text: usada para procesos lentos (reportes PDF).
+   Layout columna: dots arriba + texto debajo que va rotando. */
+.ai-chat-typing.with-status {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    min-width: 220px;
+    max-width: 320px;
+}
+.ai-chat-typing-dots {
+    display: flex; gap: 4px;
+}
+.ai-chat-typing-dots span {
+    width: 6px; height: 6px;
+    background: var(--ai-accent);
+    border-radius: 50%;
+    animation: ai-chat-bounce 1.2s infinite ease-in-out both;
+}
+.ai-chat-typing-dots span:nth-child(2) { animation-delay: 0.15s; }
+.ai-chat-typing-dots span:nth-child(3) { animation-delay: 0.3s; }
+.ai-chat-typing-msg {
+    font-size: 0.78rem;
+    color: var(--ai-text-muted);
+    line-height: 1.35;
+    transition: color 0.25s;
 }
 
 .ai-chat-form {

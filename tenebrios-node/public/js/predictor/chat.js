@@ -201,9 +201,12 @@ function appendMessage(m, scroll = true) {
 function renderReportCardInto(parentEl, report) {
     const card = document.createElement('div');
     card.className = 'ai-chat-report';
-    // URLs pasan por el proxy Express: /api/predictor/reports/<id>
-    const downloadUrl = `/api/predictor${report.url}`;
-    const previewUrl = report.preview_url ? `/api/predictor${report.preview_url}` : null;
+    // El sidecar devuelve URLs tipo "/api/reports/<id>" (sidecar-local).
+    // Express las expone bajo "/api/predictor/reports/<id>" — convertimos.
+    const toProxyUrl = (sidecarUrl) =>
+        sidecarUrl ? sidecarUrl.replace(/^\/api\/reports/, '/api/predictor/reports') : null;
+    const downloadUrl = toProxyUrl(report.url);
+    const previewUrl = toProxyUrl(report.preview_url);
     const summary = report.summary || {};
     const alertsTxt = `${summary.transitions_to_abnormal ?? 0} alertas críticas, ${summary.jumps_total ?? 0} saltos`;
 
@@ -423,12 +426,49 @@ async function onSubmit(e) {
     setBusy(true);
     setStatus('pensando…', 'thinking');
 
-    // Mostrar typing indicator
+    // Mostrar typing indicator. Si la pregunta huele a reporte PDF
+    // (tarda 30-60s), mostramos mensajes rotativos informativos para que
+    // el usuario sepa que esta pasando.
+    const isReportRequest = /\b(reporte|informe|pdf|documento)\b/i.test(text);
     const typingEl = document.createElement('div');
-    typingEl.className = 'ai-chat-typing';
-    typingEl.innerHTML = '<span></span><span></span><span></span>';
+    typingEl.className = 'ai-chat-typing' + (isReportRequest ? ' with-status' : '');
+    typingEl.innerHTML = isReportRequest
+        ? `<div class="ai-chat-typing-dots"><span></span><span></span><span></span></div>
+           <div class="ai-chat-typing-msg" data-role="msg"></div>`
+        : '<span></span><span></span><span></span>';
     msgsEl.appendChild(typingEl);
     msgsEl.scrollTop = msgsEl.scrollHeight;
+
+    let progressTimer = null;
+    if (isReportRequest) {
+        const msgEl = typingEl.querySelector('[data-role="msg"]');
+        const steps = [
+            { at: 0,     text: 'Iniciando reporte…' },
+            { at: 2,     text: 'Recolectando datos del periodo…' },
+            { at: 10,    text: 'Calculando estadísticas y precisión del modelo…' },
+            { at: 18,    text: 'Generando gráficas…' },
+            { at: 26,    text: 'Consultando el LLM para redactar resumen ejecutivo…' },
+            { at: 36,    text: 'Redactando análisis de eventos…' },
+            { at: 46,    text: 'Redactando estado de infraestructura…' },
+            { at: 54,    text: 'Redactando recomendaciones…' },
+            { at: 62,    text: 'Renderizando PDF (Playwright)…' },
+            { at: 70,    text: 'Casi listo, generando preview…' },
+            { at: 90,    text: 'Tomando más tiempo del usual, espera…' },
+        ];
+        const start = Date.now();
+        msgEl.textContent = steps[0].text;
+        progressTimer = setInterval(() => {
+            const elapsed = (Date.now() - start) / 1000;
+            // Encontrar el step mas reciente que ya paso
+            let current = steps[0];
+            for (const s of steps) {
+                if (elapsed >= s.at) current = s;
+            }
+            if (msgEl.textContent !== current.text) {
+                msgEl.textContent = current.text;
+            }
+        }, 1000);
+    }
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -447,6 +487,7 @@ async function onSubmit(e) {
             signal: controller.signal,
         });
         clearTimeout(timeoutId);
+        if (progressTimer) clearInterval(progressTimer);
         typingEl.remove();
 
         const data = await r.json().catch(() => null);
@@ -471,6 +512,7 @@ async function onSubmit(e) {
         appendMessage(assistantMsg);
         setStatus('listo');
     } catch (err) {
+        if (progressTimer) clearInterval(progressTimer);
         typingEl.remove();
         const isTimeout = err.name === 'AbortError';
         const errMsg = isTimeout ? '⏱ El agente tardó demasiado en responder. Intenta de nuevo.' : `⚠ ${err.message}`;
