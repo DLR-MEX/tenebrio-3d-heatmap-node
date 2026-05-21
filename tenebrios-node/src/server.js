@@ -394,6 +394,82 @@ export function createApp() {
     }
   });
 
+  // --- /api/predictor/reports/* --------------------------------------------
+  // Proxy de los endpoints de reportes ejecutivos. Incluye:
+  //   POST /api/predictor/reports/generate   (genera, lento 30-60s)
+  //   GET  /api/predictor/reports            (lista)
+  //   GET  /api/predictor/reports/<id>       (descarga PDF binario)
+  //   GET  /api/predictor/reports/<id>/preview (PNG primera pagina)
+  // Para los binarios (PDF, PNG) hacemos stream pasa-through.
+  const REPORTS_TIMEOUT_MS = 120000; // 2 min para generate (con LLM tarda)
+
+  app.post('/api/predictor/reports/generate', agentJsonParser, async (req, res) => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), REPORTS_TIMEOUT_MS);
+    try {
+      const upstream = await fetch(`${AI_PREDICTOR_BASE}/api/reports/generate`, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req.body || {}),
+      });
+      const text = await upstream.text();
+      res.status(upstream.status);
+      res.set('Cache-Control', 'no-store');
+      res.set('Content-Type', upstream.headers.get('content-type') || 'application/json');
+      res.send(text);
+    } catch (err) {
+      const isAbort = err.name === 'AbortError';
+      logger.warn(`report generate: ${isAbort ? 'timeout' : err.message}`);
+      res.status(isAbort ? 504 : 503).json({
+        error: isAbort
+          ? `La generación del reporte tardó más de ${REPORTS_TIMEOUT_MS / 1000}s.`
+          : `Sidecar inalcanzable: ${err.message}`,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  });
+
+  app.get('/api/predictor/reports', (req, res) =>
+    proxyJson('GET', '/api/reports', req, res));
+
+  // Proxy binarios (PDF y PNG): stream pasa-through
+  async function proxyBinary(upstreamPath, req, res) {
+    try {
+      const upstream = await fetch(`${AI_PREDICTOR_BASE}${upstreamPath}`);
+      if (!upstream.ok) {
+        return res.status(upstream.status).json({ error: `upstream HTTP ${upstream.status}` });
+      }
+      res.status(200);
+      res.set('Content-Type', upstream.headers.get('content-type') || 'application/octet-stream');
+      const contentDisposition = upstream.headers.get('content-disposition');
+      if (contentDisposition) res.set('Content-Disposition', contentDisposition);
+      // Stream el body al cliente
+      const arrayBuffer = await upstream.arrayBuffer();
+      res.send(Buffer.from(arrayBuffer));
+    } catch (err) {
+      logger.warn(`proxy binary ${upstreamPath}: ${err.message}`);
+      res.status(503).json({ error: 'sidecar inalcanzable' });
+    }
+  }
+
+  app.get('/api/predictor/reports/:id', (req, res) => {
+    const id = req.params.id;
+    if (!/^[A-Za-z0-9_\-]{1,64}$/.test(id)) {
+      return res.status(400).json({ error: 'id invalido' });
+    }
+    proxyBinary(`/api/reports/${encodeURIComponent(id)}`, req, res);
+  });
+
+  app.get('/api/predictor/reports/:id/preview', (req, res) => {
+    const id = req.params.id;
+    if (!/^[A-Za-z0-9_\-]{1,64}$/.test(id)) {
+      return res.status(400).json({ error: 'id invalido' });
+    }
+    proxyBinary(`/api/reports/${encodeURIComponent(id)}/preview`, req, res);
+  });
+
   // --- /api/predictor/stream ------------------------------------------------
   // Proxy SSE: pasa-through del stream del sidecar. Mantiene los eventos
   // (snapshot/update/ping) sin transformar; el cliente los consume con

@@ -164,6 +164,13 @@ TU ROL:
   renderiza inline en el widget; tu solo añade un breve comentario
   con stats relevantes (min/max/avg, picos, tendencias) — NO repitas
   todos los puntos numericos en tu texto.
+- Cuando el usuario pida un REPORTE, "PDF", "informe ejecutivo",
+  "documento" o "resumen formal" — usa generate_report. La tool
+  genera un PDF completo (portada + 7 secciones + recomendaciones)
+  con narrativa redactada por ti. Tarda 30-60s — avisale al usuario.
+  El widget muestra el PDF como tarjeta con preview y descarga.
+  En tu respuesta despues de la tool, menciona brevemente (1-2 lineas)
+  el periodo cubierto y los conteos clave (alertas, saltos).
 - Si no tienes la información, di que no la tienes — no inventes.
 - Si una pregunta es ambigua (qué sensor?), pide aclaración.
 - No tienes capacidad de cambiar nada del sistema; eres solo informativo.
@@ -382,6 +389,50 @@ def _tool_schemas() -> list[dict]:
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "generate_report",
+                "description": (
+                    "Genera un REPORTE EJECUTIVO en PDF para un periodo. Incluye "
+                    "portada, resumen ejecutivo, estado actual, análisis por sensor "
+                    "con gráficas, eventos destacados, precisión del modelo, estado "
+                    "de infraestructura y recomendaciones (todas con narrativa "
+                    "redactada por IA). Tarda 30-60s. Úsalo cuando el usuario pida "
+                    "'reporte', 'PDF', 'informe', 'documento ejecutivo' o "
+                    "'resumen formal'. Para fechas relativas ('última semana', "
+                    "'este mes') calcula start/end basado en la fecha actual."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "hours": {
+                            "type": "number",
+                            "description": (
+                                "Horas hacia atrás desde ahora. Si se pasa, ignora "
+                                "start_iso/end_iso. Default 24. Max 744 (31 días)."
+                            ),
+                        },
+                        "start_iso": {
+                            "type": "string",
+                            "description": (
+                                "Fecha de inicio en formato YYYY-MM-DD o ISO completo. "
+                                "Requiere también end_iso."
+                            ),
+                        },
+                        "end_iso": {
+                            "type": "string",
+                            "description": "Fecha de fin (formato igual que start_iso).",
+                        },
+                        "title": {
+                            "type": "string",
+                            "description": "Título personalizado (default auto-generado).",
+                        },
+                    },
+                    "required": [],
+                },
+            },
+        },
     ]
 
 
@@ -486,10 +537,12 @@ class AgentService:
                 raise
         return None
 
-    def chat(self, messages: list[dict]) -> dict:
+    def chat(self, messages: list[dict], disable_tools: bool = False) -> dict:
         """
         messages: lista [{"role": "user"|"assistant"|"system", "content": str}].
         El system prompt se inyecta al inicio si no está.
+        disable_tools: si True, no pasa tools al LLM (usado por commentary
+                       para evitar recursion de generate_report dentro de si).
         Devuelve {"reply": str, "tool_calls": [...], "model": str}.
         """
         if not self.ready:
@@ -503,7 +556,10 @@ class AgentService:
         # Charts emitidos por la tool plot_history. Se devuelven al cliente
         # en el campo 'charts' del response asi el widget los renderiza inline.
         charts: list[dict] = []
-        tools = _tool_schemas()
+        # Report cards emitidos por la tool generate_report. Se devuelven en
+        # el campo 'reports' para que el widget muestre tarjetas con preview.
+        reports: list[dict] = []
+        tools = [] if disable_tools else _tool_schemas()
 
         for loop_idx in range(self.MAX_TOOL_LOOPS):
             response = self._post_with_retries(messages, tools, loop_idx)
@@ -548,6 +604,7 @@ class AgentService:
                     "reply": msg.get("content") or "",
                     "tool_calls": tool_calls_summary,
                     "charts": charts,
+                    "reports": reports,
                     "model": self.model,
                 }
 
@@ -580,18 +637,31 @@ class AgentService:
                         "summary": result.get("summary"),
                         "_note": result.get("_note"),
                     }
+                # Si el tool emitió un reporte PDF, lo capturamos para el
+                # cliente. Al LLM solo le mandamos metadata + summary.
+                elif isinstance(result, dict) and "report_card" in result:
+                    reports.append(result["report_card"])
+                    tool_payload_for_llm = {
+                        "report_generated": True,
+                        "period": result["report_card"].get("period_iso"),
+                        "summary": result["report_card"].get("summary"),
+                        "size_kb": result["report_card"].get("size_kb"),
+                        "_note": result.get("_note"),
+                    }
                 messages.append({
                     "role": "tool",
                     "name": name,
                     "content": json.dumps(tool_payload_for_llm, default=str)[:8000],
                 })
 
-        # Si llegamos aca, el modelo no termino. Devolvemos lo que tenemos.
+        # Si llegamos aca, el modelo no termino. Devolvemos lo que tenemos
+        # (incluyendo charts y reports generados parcialmente).
         log.warning("Agente alcanzo MAX_TOOL_LOOPS=%d sin respuesta final", self.MAX_TOOL_LOOPS)
         return {
             "reply": "Disculpa, no pude completar la consulta (demasiados pasos). Intenta reformular la pregunta.",
             "tool_calls": tool_calls_summary,
             "charts": charts,
+            "reports": reports,
             "model": self.model,
         }
 
@@ -612,7 +682,98 @@ class AgentService:
             return self._tool_plot(args)
         if name == "get_infrastructure_state":
             return self._tool_infrastructure(args)
+        if name == "generate_report":
+            return self._tool_generate_report(args)
         return {"error": f"tool desconocida: {name}"}
+
+    def _tool_generate_report(self, args: dict) -> dict:
+        """Genera un PDF ejecutivo. Devuelve metadata para el cliente +
+        un payload reducido al LLM (sin el PDF binario)."""
+        # Resolver rango
+        now = time.time()
+        if args.get("hours") is not None:
+            try:
+                hours = float(args["hours"])
+            except (TypeError, ValueError):
+                return {"error": "hours debe ser numerico"}
+            hours = max(0.1, min(hours, 744))  # 31 dias max
+            start_ts = now - hours * 3600
+            end_ts = now
+        elif args.get("start_iso") and args.get("end_iso"):
+            try:
+                from datetime import datetime
+                start_ts = datetime.fromisoformat(args["start_iso"]).timestamp()
+                end_ts = datetime.fromisoformat(args["end_iso"]).timestamp()
+            except (TypeError, ValueError) as e:
+                return {"error": f"fechas ISO invalidas: {e}"}
+        else:
+            start_ts = now - 24 * 3600
+            end_ts = now
+
+        if end_ts <= start_ts:
+            return {"error": "end debe ser mayor a start"}
+        if (end_ts - start_ts) > 31 * 86400:
+            return {"error": "rango maximo 31 dias"}
+
+        title = args.get("title")
+
+        # Llamamos al mismo path que el endpoint REST
+        from app.reports.collector import collect_period_data
+        from app.reports.charts import generate_all_charts
+        from app.reports.render import render_pdf, save_pdf, generate_preview_png
+        from pathlib import Path
+
+        reports_dir = Path(__file__).resolve().parent.parent / "reports" / "output"
+        reports_dir.mkdir(parents=True, exist_ok=True)
+
+        log.info("Generando reporte (%.1fh) — esto puede tardar 30-60s",
+                 (end_ts - start_ts) / 3600)
+        data = collect_period_data(self.prediction_service, start_ts, end_ts)
+        charts = generate_all_charts(data)
+
+        # Commentary: usamos este mismo agent (recursion controlada — solo
+        # las llamadas dentro de commentary.py, sin tool calling adicional)
+        try:
+            from app.reports.commentary import generate_commentary
+            commentary = generate_commentary(self, data)
+        except Exception as e:
+            log.warning("commentary fallo: %s", e)
+            commentary = {}
+
+        pdf_bytes = render_pdf(data, charts, commentary, title)
+        pdf_path = save_pdf(pdf_bytes, reports_dir, start_ts, end_ts)
+        preview_png = generate_preview_png(pdf_path)
+        if preview_png:
+            (pdf_path.with_suffix(".preview.png")).write_bytes(preview_png)
+
+        report_id = pdf_path.stem
+
+        # Devolvemos al LLM solo metadata — no el contenido del reporte.
+        # El _chart_spec equivalente para reports lo manejamos via 'reports'
+        # en el response final de chat() (similar a charts).
+        report_card = {
+            "report_id": report_id,
+            "filename": pdf_path.name,
+            "size_kb": round(pdf_path.stat().st_size / 1024, 1),
+            "url": f"/api/reports/{report_id}",
+            "preview_url": f"/api/reports/{report_id}/preview" if preview_png else None,
+            "period_iso": f"{data['meta']['start_iso']} a {data['meta']['end_iso']}",
+            "hours": data["meta"]["hours"],
+            "summary": {
+                "transitions_to_abnormal": data["alerts"]["transitions_to_abnormal"],
+                "jumps_total": data["alerts"]["jumps_total"],
+            },
+        }
+        return {
+            "report_card": report_card,
+            "_note": (
+                "El reporte PDF se renderizo y guardo. El widget mostrara una "
+                "tarjeta con preview y boton de descarga. En tu respuesta, "
+                "menciona brevemente que generaste el reporte (1-2 lineas), "
+                "indica el periodo y los conteos clave. NO repitas la URL — "
+                "el widget la presentara como boton."
+            ),
+        }
 
     def _tool_current_state(self) -> dict:
         snap = self.prediction_service.snapshot()

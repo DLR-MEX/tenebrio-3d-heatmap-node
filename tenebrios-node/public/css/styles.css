@@ -1558,6 +1558,83 @@ body.demo-mode .ai-dashboard { height: 100vh !important; }
 .ai-chat-msg strong { color: var(--ai-accent); }
 .ai-chat-msg-user strong { color: var(--ai-bg-base); font-weight: 800; }
 
+/* Tarjeta de reporte PDF (resultado de la tool generate_report) */
+.ai-chat-report {
+    display: flex;
+    gap: 12px;
+    margin: 10px 0 6px;
+    background: var(--ai-bg-base);
+    border: 1px solid var(--ai-border);
+    border-radius: 10px;
+    overflow: hidden;
+    max-width: 100%;
+}
+.ai-chat-report-preview {
+    width: 96px;
+    height: auto;
+    object-fit: cover;
+    background: white;
+    border-right: 1px solid var(--ai-border);
+    flex-shrink: 0;
+}
+.ai-chat-report-body {
+    flex: 1;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+.ai-chat-report-title {
+    font-weight: 700;
+    color: var(--ai-accent);
+    font-size: 0.9rem;
+}
+.ai-chat-report-meta {
+    display: flex;
+    gap: 8px;
+    font-size: 0.72rem;
+    color: var(--ai-text-muted);
+}
+.ai-chat-report-size {
+    background: rgba(232,184,48,0.10);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-family: monospace;
+}
+.ai-chat-report-stats {
+    font-size: 0.78rem;
+    color: var(--ai-text);
+    margin: 2px 0 6px;
+}
+.ai-chat-report-btn {
+    display: inline-block;
+    align-self: flex-start;
+    padding: 6px 12px;
+    background: var(--ai-accent);
+    color: var(--ai-bg-base);
+    border-radius: 6px;
+    text-decoration: none;
+    font-size: 0.8rem;
+    font-weight: 700;
+    transition: transform 0.12s;
+}
+.ai-chat-report-btn:hover { transform: scale(1.04); }
+[data-theme="light"] .ai-chat-report {
+    background: rgba(0,0,0,0.02);
+}
+[data-theme="light"] .ai-chat-report-preview {
+    background: white;
+}
+/* Mensaje del usuario (fondo dorado): invertir tarjeta */
+.ai-chat-msg-user .ai-chat-report {
+    background: rgba(0,0,0,0.10);
+    border-color: rgba(0,0,0,0.20);
+}
+.ai-chat-msg-user .ai-chat-report-title {
+    color: var(--ai-bg-base);
+}
+
 /* Charts inline en el chat (ECharts) */
 .ai-chat-chart {
     width: 100%;

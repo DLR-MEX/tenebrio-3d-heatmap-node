@@ -14,7 +14,7 @@ const SUGGESTED_PROMPTS = [
     { icon: '🌡', text: '¿Cómo está el cuarto ahora?' },
     { icon: '🚨', text: '¿Hubo anomalías hoy?' },
     { icon: '📈', text: 'Gráfica de temperaturas últimas 6 horas' },
-    { icon: '💧', text: '¿Desde cuándo está mal la humedad?' },
+    { icon: '📊', text: 'Genera un reporte PDF de la última semana' },
     { icon: '🔥', text: '¿Cómo está el termo y el calentador?' },
     { icon: '🌬', text: '¿Cómo está la calidad del aire?' },
 ];
@@ -179,6 +179,13 @@ function appendMessage(m, scroll = true) {
         }
     }
 
+    // Reports inline: tarjeta con preview PNG + descarga del PDF
+    if (m.reports && m.reports.length > 0) {
+        for (const r of m.reports) {
+            renderReportCardInto(el, r);
+        }
+    }
+
     if (m.tools && m.tools.length > 0) {
         const tools = document.createElement('div');
         tools.className = 'ai-chat-tools';
@@ -188,6 +195,33 @@ function appendMessage(m, scroll = true) {
 
     msgsEl.appendChild(el);
     if (scroll) msgsEl.scrollTop = msgsEl.scrollHeight;
+}
+
+// Tarjeta de reporte PDF: preview PNG + metadata + boton descarga.
+function renderReportCardInto(parentEl, report) {
+    const card = document.createElement('div');
+    card.className = 'ai-chat-report';
+    // URLs pasan por el proxy Express: /api/predictor/reports/<id>
+    const downloadUrl = `/api/predictor${report.url}`;
+    const previewUrl = report.preview_url ? `/api/predictor${report.preview_url}` : null;
+    const summary = report.summary || {};
+    const alertsTxt = `${summary.transitions_to_abnormal ?? 0} alertas críticas, ${summary.jumps_total ?? 0} saltos`;
+
+    card.innerHTML = `
+        ${previewUrl ? `<img class="ai-chat-report-preview" src="${previewUrl}" alt="Vista previa del reporte" loading="lazy">` : ''}
+        <div class="ai-chat-report-body">
+            <div class="ai-chat-report-title">📊 Reporte ejecutivo PDF</div>
+            <div class="ai-chat-report-meta">
+                <span class="ai-chat-report-period">${escapeHTML(report.period_iso || '')}</span>
+                <span class="ai-chat-report-size">${report.size_kb ?? '?'} KB</span>
+            </div>
+            <div class="ai-chat-report-stats">${escapeHTML(alertsTxt)}</div>
+            <a class="ai-chat-report-btn" href="${downloadUrl}" download="${escapeHTML(report.filename || 'reporte.pdf')}" target="_blank">
+                ⬇ Descargar PDF
+            </a>
+        </div>
+    `;
+    parentEl.appendChild(card);
 }
 
 // Crea un contenedor + instancia ECharts dentro del mensaje.
@@ -430,6 +464,7 @@ async function onSubmit(e) {
             content: reply,
             tools: data.tool_calls || [],
             charts: data.charts || [],
+            reports: data.reports || [],
         };
         history.push(assistantMsg);
         saveHistory();

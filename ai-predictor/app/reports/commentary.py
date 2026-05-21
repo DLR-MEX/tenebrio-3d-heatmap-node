@@ -81,7 +81,9 @@ def _safe_section(agent, data: dict, name: str, prompt_fn, fallback: str) -> str
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ]
-        result = agent.chat(messages)
+        # disable_tools=True para prevenir recursion infinita y mantener
+        # el commentary enfocado en redactar texto, no en pedir mas datos.
+        result = agent.chat(messages, disable_tools=True)
         reply = (result or {}).get("reply") or ""
         if not reply.strip():
             log.warning("Seccion '%s' devolvio vacio — usando fallback", name)
