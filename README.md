@@ -1,8 +1,20 @@
-# Mapa de Calor 3D en Tiempo Real — Node.js + Babylon.js
+# Mapa de Calor 3D en Tiempo Real — Node.js + Babylon.js + Agente IA
 
-Aplicacion Node.js que genera un mapa de calor volumetrico 3D en tiempo real de
-un cuarto de cria de tenebrios, usando datos de temperatura y humedad recibidos
-desde Ubidots via MQTT. Migracion del proyecto original Python/Flask/Plotly.
+Aplicacion que combina:
+- **Dashboard 3D** (Node.js + Babylon.js) — mapa de calor volumetrico en tiempo real
+- **Predictor IA** (Python + GRU + agente conversacional) — forecast +3 min, alertas, chat
+
+Migracion del proyecto original Python/Flask/Plotly, ahora con sidecar de IA.
+
+## Documentación
+
+Toda la documentación detallada vive en **[`docs/`](docs/README.md)**:
+
+- **[Cambios agente IA](docs/AGENTE_IA_CAMBIOS.md)** — agente conversacional, bot Telegram bidireccional, widget de chat, gráficas, detector de saltos
+- **[Integración dashboard + sidecar](docs/INTEGRATION.md)** — arranque rápido, troubleshooting
+- **[Predictor IA](docs/ai-predictor.md)** — modelos GRU, training
+- **[Dashboard 3D](docs/node-dashboard.md)** — heatmap volumétrico, MQTT
+- **[Instalación servicio Windows](docs/node-scripts-install.md)** — kiosko Chrome, autoarranque
 
 ## Stack tecnico
 

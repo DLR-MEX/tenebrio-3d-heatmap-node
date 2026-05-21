@@ -92,13 +92,21 @@ tenebrio-3d-heatmap-node/
 │           ├── charts.js            ECharts overlay real vs predicho
 │           └── sse.js               cliente EventSource
 ├── ai-predictor/                    NUEVO (proyecto Python tal cual)
-│   ├── app/                         FastAPI + service.py
+│   ├── app/                         FastAPI + service.py + agent.py + alert_log.py
 │   ├── models/                      *.keras + *.save (≈636 KB total)
 │   ├── pyproject.toml
-│   ├── .env.example
-│   └── README_AI.md
-├── start_all.bat                    NUEVO
-├── INTEGRATION.md                   NUEVO (este archivo)
+│   └── .env.example
+├── docs/                            NUEVA carpeta de documentacion
+│   ├── README.md                    indice
+│   ├── AGENTE_IA_CAMBIOS.md         cambios del agente IA + Telegram + chat
+│   ├── INTEGRATION.md               este archivo
+│   ├── ai-predictor.md              README del modulo Python (antes README_AI.md)
+│   ├── node-dashboard.md            README del dashboard Node
+│   ├── node-changelog.md            migracion Python -> Node
+│   ├── node-requirements.md         requisitos del sistema
+│   └── node-scripts-install.md      instalacion como servicio Windows
+├── start_all.bat                    arranca sidecar + Express
+├── README.md                        index general (apunta a docs/)
 └── .gitignore                       +entradas Python
 ```
 

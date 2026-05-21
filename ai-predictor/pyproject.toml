@@ -2,7 +2,7 @@
 name = "tenebris-ai-sentinel"
 version = "0.1.0"
 description = "Servicio de prediccion en tiempo real (GRU dual) para cuarto de cria de tenebrios."
-readme = "README_AI.md"
+readme = "../docs/ai-predictor.md"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi[standard]>=0.135.3",
