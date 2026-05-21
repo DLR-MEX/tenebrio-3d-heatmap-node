@@ -27,11 +27,12 @@ INDEX_HTML = STATIC_DIR / "index.html"
 
 service: Optional[PredictionService] = None
 agent: Optional[AgentService] = None
+report_scheduler = None  # type: Optional['ReportScheduler']
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global service, agent
+    global service, agent, report_scheduler
     cfg = Config.load()
     setup_logging(cfg.log_level)
     service = PredictionService(cfg)
@@ -47,9 +48,29 @@ async def lifespan(app: FastAPI):
     )
     # Construir listener bidireccional (depende de agent + telegram_bot_token)
     service.attach_agent(agent)
+
+    # ReportScheduler: persistencia SQLite, los jobs sobreviven reinicios.
+    # Se inicia DESPUES de agent y service para que el callback pueda
+    # accederlos.
+    try:
+        from app.reports.scheduler import ReportScheduler, set_global_scheduler
+        jobs_db = Path(__file__).resolve().parent.parent / "reports" / "jobs.sqlite"
+        report_scheduler = ReportScheduler(
+            db_path=jobs_db,
+            generator_fn=_generate_report_sync,  # definido mas abajo
+            telegram_sender=None,  # Fase 5: se conecta despues
+        )
+        set_global_scheduler(report_scheduler)
+        report_scheduler.start()
+    except Exception as e:
+        logging.getLogger("reports.scheduler").error("No se pudo iniciar scheduler: %s", e)
+        report_scheduler = None
+
     try:
         yield
     finally:
+        if report_scheduler is not None:
+            report_scheduler.stop()
         if agent is not None:
             agent.close()
         service.stop()
@@ -270,8 +291,75 @@ async def list_reports():
 
 
 _REPORT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_\-]{1,64}$")
+_RESERVED_REPORT_IDS = {"schedule", "list", "generate"}
+
 def _safe_report_id(report_id: str) -> bool:
+    if report_id in _RESERVED_REPORT_IDS:
+        return False
     return bool(_REPORT_ID_PATTERN.match(report_id))
+
+
+# --- Scheduled reports ---------------------------------------------------
+
+@app.get("/api/schedules")
+async def list_schedules():
+    if report_scheduler is None:
+        return {"schedules": []}
+    return {"schedules": report_scheduler.list()}
+
+
+@app.post("/api/schedules")
+async def create_schedule(request: Request):
+    if report_scheduler is None:
+        return JSONResponse({"error": "scheduler no disponible"}, status_code=503)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "JSON invalido"}, status_code=400)
+
+    name = (body.get("name") or "").strip()
+    cron = (body.get("cron") or "").strip()
+    period_kind = body.get("period_kind", "daily")
+    deliver_to = body.get("deliver_to") or ["disk"]
+    title = body.get("title")
+
+    if not name:
+        return JSONResponse({"error": "name requerido"}, status_code=400)
+    # Si pasaron friendly_cron en vez de cron, parsearlo
+    if not cron and body.get("friendly_cron"):
+        from app.reports.scheduler import parse_friendly_cron
+        cron = parse_friendly_cron(body["friendly_cron"])
+        if not cron:
+            return JSONResponse(
+                {"error": f"No reconozco la expresion '{body['friendly_cron']}'. "
+                          "Usa formato 'diario 8am', 'lunes 9am', etc."},
+                status_code=400,
+            )
+    if not cron:
+        return JSONResponse({"error": "cron o friendly_cron requeridos"}, status_code=400)
+
+    try:
+        result = report_scheduler.add(
+            name=name, cron=cron, period_kind=period_kind,
+            deliver_to=deliver_to, title=title,
+        )
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        return JSONResponse({"error": f"Error: {e}"}, status_code=500)
+    return result
+
+
+@app.delete("/api/schedules/{schedule_id}")
+async def delete_schedule(schedule_id: str):
+    if report_scheduler is None:
+        return JSONResponse({"error": "scheduler no disponible"}, status_code=503)
+    if not re.match(r"^[A-Za-z0-9_\-]{1,64}$", schedule_id):
+        return JSONResponse({"error": "schedule_id invalido"}, status_code=400)
+    ok = report_scheduler.remove(schedule_id)
+    if not ok:
+        return JSONResponse({"error": "schedule no encontrado"}, status_code=404)
+    return {"ok": True, "schedule_id": schedule_id}
 
 
 # --- Ubidots history (cache compartido con Express) -----------------------

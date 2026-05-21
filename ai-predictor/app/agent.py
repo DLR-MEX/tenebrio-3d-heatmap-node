@@ -392,6 +392,85 @@ def _tool_schemas() -> list[dict]:
         {
             "type": "function",
             "function": {
+                "name": "schedule_report",
+                "description": (
+                    "Programa la generación automática de un reporte ejecutivo "
+                    "PDF en un horario recurrente. Úsalo cuando el usuario diga "
+                    "'programa', 'automatiza', 'todos los lunes', 'diariamente', etc. "
+                    "Acepta cron estándar O expresiones amigables en español."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Nombre descriptivo (ej. 'Semanal lunes', 'Diario 8am')",
+                        },
+                        "cron": {
+                            "type": "string",
+                            "description": (
+                                "Expresion cron estandar: 'min hora dia_mes mes dia_sem'. "
+                                "Ej: '0 8 * * 1' = lunes 8am, '0 7 * * *' = diario 7am."
+                            ),
+                        },
+                        "friendly_cron": {
+                            "type": "string",
+                            "description": (
+                                "Alternativa a cron: expresion en espanol. "
+                                "Ej: 'diario 8am', 'lunes 9am', 'miercoles 7pm'."
+                            ),
+                        },
+                        "period_kind": {
+                            "type": "string",
+                            "enum": ["daily", "weekly", "monthly"],
+                            "description": (
+                                "Que periodo cubre el reporte al disparar: "
+                                "daily = ultimas 24h, weekly = ultima semana, "
+                                "monthly = ultimos 30 dias."
+                            ),
+                        },
+                        "deliver_to": {
+                            "type": "array",
+                            "items": {"type": "string", "enum": ["disk", "telegram"]},
+                            "description": (
+                                "Donde entregar el PDF al disparar. "
+                                "['disk'] = solo guardar; ['telegram'] = mandar al bot; "
+                                "['disk','telegram'] = ambos."
+                            ),
+                        },
+                    },
+                    "required": ["name", "period_kind"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "list_scheduled_reports",
+                "description": "Lista todos los reportes programados con su próxima ejecución.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "cancel_report_schedule",
+                "description": "Cancela un reporte programado por su schedule_id.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "schedule_id": {
+                            "type": "string",
+                            "description": "ID del schedule (formato 'report_<hex>')",
+                        },
+                    },
+                    "required": ["schedule_id"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "generate_report",
                 "description": (
                     "Genera un REPORTE EJECUTIVO en PDF para un periodo. Incluye "
@@ -684,7 +763,81 @@ class AgentService:
             return self._tool_infrastructure(args)
         if name == "generate_report":
             return self._tool_generate_report(args)
+        if name == "schedule_report":
+            return self._tool_schedule_report(args)
+        if name == "list_scheduled_reports":
+            return self._tool_list_scheduled()
+        if name == "cancel_report_schedule":
+            return self._tool_cancel_schedule(args)
         return {"error": f"tool desconocida: {name}"}
+
+    # ---- helpers para acceder al scheduler global ----
+    @staticmethod
+    def _get_scheduler():
+        from app import main as _main
+        return _main.report_scheduler
+
+    def _tool_schedule_report(self, args: dict) -> dict:
+        sched = self._get_scheduler()
+        if sched is None:
+            return {"error": "Scheduler no disponible en el sidecar."}
+
+        name = (args.get("name") or "").strip()
+        if not name:
+            return {"error": "name requerido"}
+        period_kind = args.get("period_kind", "daily")
+        deliver_to = args.get("deliver_to") or ["disk"]
+
+        cron = (args.get("cron") or "").strip()
+        if not cron and args.get("friendly_cron"):
+            from app.reports.scheduler import parse_friendly_cron
+            cron = parse_friendly_cron(args["friendly_cron"])
+            if not cron:
+                return {"error": (
+                    f"No reconozco '{args['friendly_cron']}'. "
+                    "Ej: 'diario 8am', 'lunes 9am', 'viernes 6pm'."
+                )}
+        if not cron:
+            return {"error": "Debes proporcionar cron o friendly_cron"}
+
+        try:
+            result = sched.add(
+                name=name, cron=cron, period_kind=period_kind,
+                deliver_to=deliver_to,
+            )
+            return {
+                "ok": True,
+                "schedule_id": result["schedule_id"],
+                "name": result["name"],
+                "cron": result["cron"],
+                "period_kind": result["period_kind"],
+                "deliver_to": result["deliver_to"],
+                "next_run_iso": result["next_run_iso"],
+                "_note": (
+                    "Schedule registrado correctamente. Persiste reinicios del sidecar. "
+                    "Avisa al usuario el nombre, cron y next_run."
+                ),
+            }
+        except ValueError as e:
+            return {"error": str(e)}
+        except Exception as e:
+            return {"error": f"Error: {e}"}
+
+    def _tool_list_scheduled(self) -> dict:
+        sched = self._get_scheduler()
+        if sched is None:
+            return {"schedules": [], "_note": "Scheduler no disponible."}
+        return {"schedules": sched.list()}
+
+    def _tool_cancel_schedule(self, args: dict) -> dict:
+        sched = self._get_scheduler()
+        if sched is None:
+            return {"error": "Scheduler no disponible."}
+        schedule_id = (args.get("schedule_id") or "").strip()
+        if not schedule_id:
+            return {"error": "schedule_id requerido"}
+        ok = sched.remove(schedule_id)
+        return {"ok": ok, "schedule_id": schedule_id}
 
     def _tool_generate_report(self, args: dict) -> dict:
         """Genera un PDF ejecutivo. Devuelve metadata para el cliente +
