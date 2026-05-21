@@ -103,6 +103,177 @@ async def healthz():
     return {"ok": True, "mqtt_connected": service.mqtt_connected}
 
 
+# --- Reportes ejecutivos PDF ---------------------------------------------
+# El agente IA (via tool generate_report) o el cliente (via REST) pueden
+# pedir un PDF ejecutivo para un periodo. Genera con Playwright a partir
+# de un template Jinja2 + matplotlib charts embebidos.
+
+from fastapi.responses import StreamingResponse  # noqa: E402
+
+REPORTS_DIR = Path(__file__).resolve().parent.parent / "reports" / "output"
+REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+MAX_REPORT_DAYS = 31
+
+
+@app.post("/api/reports/generate")
+async def post_reports_generate(request: Request):
+    """POST /api/reports/generate
+
+    Body: {start_iso?, end_iso?, hours?, title?}
+    - Si se da hours: end = now, start = now - hours
+    - Si se dan start_iso/end_iso (formato 'YYYY-MM-DD' o ISO completo): usar esos
+    - Default: ultimas 24h
+
+    Returns: {report_id, filename, size_kb, url, preview_url}
+    """
+    if service is None:
+        return JSONResponse({"error": "service not ready"}, status_code=503)
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "body debe ser objeto"}, status_code=400)
+
+    # Resolver rango temporal
+    now = time.time()
+    if "hours" in body:
+        try:
+            hours = float(body["hours"])
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "hours debe ser numerico"}, status_code=400)
+        end_ts = now
+        start_ts = now - hours * 3600
+    elif "start_iso" in body and "end_iso" in body:
+        try:
+            from datetime import datetime
+            start_ts = datetime.fromisoformat(body["start_iso"]).timestamp()
+            end_ts = datetime.fromisoformat(body["end_iso"]).timestamp()
+        except (TypeError, ValueError) as e:
+            return JSONResponse({"error": f"fechas ISO invalidas: {e}"}, status_code=400)
+    else:
+        start_ts = now - 24 * 3600
+        end_ts = now
+
+    if end_ts <= start_ts:
+        return JSONResponse({"error": "end debe ser mayor a start"}, status_code=400)
+    if (end_ts - start_ts) > MAX_REPORT_DAYS * 86400:
+        return JSONResponse(
+            {"error": f"rango maximo {MAX_REPORT_DAYS} dias"}, status_code=400,
+        )
+
+    title = body.get("title")
+    include_commentary = bool(body.get("include_commentary", True))
+
+    # Generar en thread para no bloquear el event loop
+    try:
+        result = await asyncio.to_thread(
+            _generate_report_sync, start_ts, end_ts, title, include_commentary,
+        )
+    except Exception as e:
+        logging.getLogger("reports").exception("Error generando reporte")
+        return JSONResponse({"error": f"Error: {e}"}, status_code=500)
+
+    return result
+
+
+def _generate_report_sync(start_ts: float, end_ts: float,
+                          title: Optional[str], include_commentary: bool) -> dict:
+    """Lo invoca generate_report del agente y el endpoint REST."""
+    from app.reports.collector import collect_period_data
+    from app.reports.charts import generate_all_charts
+    from app.reports.render import render_pdf, save_pdf, generate_preview_png
+
+    data = collect_period_data(service, start_ts, end_ts)
+    charts = generate_all_charts(data)
+
+    commentary = {}
+    if include_commentary and agent is not None and agent.ready:
+        try:
+            from app.reports.commentary import generate_commentary
+            commentary = generate_commentary(agent, data)
+        except ImportError:
+            pass  # Fase 2 todavia no implementada
+        except Exception as e:
+            logging.getLogger("reports").warning("commentary fallo: %s", e)
+
+    pdf_bytes = render_pdf(data, charts, commentary, title)
+    pdf_path = save_pdf(pdf_bytes, REPORTS_DIR, start_ts, end_ts)
+
+    # Generar preview PNG (best-effort)
+    preview_png = generate_preview_png(pdf_path)
+    preview_path = None
+    if preview_png:
+        preview_path = pdf_path.with_suffix(".preview.png")
+        preview_path.write_bytes(preview_png)
+
+    report_id = pdf_path.stem
+    return {
+        "report_id": report_id,
+        "filename": pdf_path.name,
+        "size_kb": round(pdf_path.stat().st_size / 1024, 1),
+        "url": f"/api/reports/{report_id}",
+        "preview_url": f"/api/reports/{report_id}/preview" if preview_png else None,
+        "meta": data["meta"],
+        "summary": {
+            "transitions_to_abnormal": data["alerts"]["transitions_to_abnormal"],
+            "jumps_total": data["alerts"]["jumps_total"],
+        },
+    }
+
+
+@app.get("/api/reports/{report_id}")
+async def get_report(report_id: str):
+    """Descarga el PDF binario."""
+    if not _safe_report_id(report_id):
+        return JSONResponse({"error": "report_id invalido"}, status_code=400)
+    path = REPORTS_DIR / f"{report_id}.pdf"
+    if not path.exists():
+        return JSONResponse({"error": "reporte no encontrado"}, status_code=404)
+    return FileResponse(
+        str(path),
+        media_type="application/pdf",
+        filename=f"{report_id}.pdf",
+    )
+
+
+@app.get("/api/reports/{report_id}/preview")
+async def get_report_preview(report_id: str):
+    """Devuelve PNG de la primera pagina del PDF (para mostrar en widget)."""
+    if not _safe_report_id(report_id):
+        return JSONResponse({"error": "report_id invalido"}, status_code=400)
+    path = REPORTS_DIR / f"{report_id}.preview.png"
+    if not path.exists():
+        return JSONResponse({"error": "preview no disponible"}, status_code=404)
+    return FileResponse(str(path), media_type="image/png")
+
+
+@app.get("/api/reports")
+async def list_reports():
+    """Lista los reportes guardados, ordenados por fecha desc."""
+    reports = []
+    for pdf in sorted(REPORTS_DIR.glob("*.pdf"), key=lambda p: p.stat().st_mtime, reverse=True):
+        stat = pdf.stat()
+        report_id = pdf.stem
+        reports.append({
+            "report_id": report_id,
+            "filename": pdf.name,
+            "size_kb": round(stat.st_size / 1024, 1),
+            "generated_iso": time.strftime("%Y-%m-%d %H:%M:%S",
+                                           time.localtime(stat.st_mtime)),
+            "url": f"/api/reports/{report_id}",
+            "preview_url": f"/api/reports/{report_id}/preview"
+                if (REPORTS_DIR / f"{report_id}.preview.png").exists() else None,
+        })
+    return {"reports": reports[:50]}
+
+
+_REPORT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_\-]{1,64}$")
+def _safe_report_id(report_id: str) -> bool:
+    return bool(_REPORT_ID_PATTERN.match(report_id))
+
+
 # --- Ubidots history (cache compartido con Express) -----------------------
 # Express tambien necesita histórico para el slider de la vista 3D. En lugar
 # de que ambos pegen a Ubidots HTTP (rate-limit doble), Express consume este

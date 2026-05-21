@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ meta.title or "Reporte Ejecutivo" }} — Tenebris AI Sentinel</title>
+    <style>{{ css_content | safe }}</style>
+</head>
+<body>
+
+<!-- ============================================================
+     PORTADA
+     ============================================================ -->
+<section class="cover">
+    <div class="cover-inner">
+        <div class="brand">
+            <div class="brand-mark">🪲</div>
+            <div class="brand-text">
+                <div class="brand-title">TENEBRIS <span>AI</span> SENTINEL</div>
+                <div class="brand-sub">CONDOR · monitoreo inteligente</div>
+            </div>
+        </div>
+
+        <div class="cover-title">REPORTE EJECUTIVO</div>
+        <div class="cover-period">
+            {{ meta.start_iso }} — {{ meta.end_iso }}
+        </div>
+        <div class="cover-meta">
+            Periodo: {{ meta.hours }}h
+            {%- if meta.days >= 1 %} ({{ "%.1f"|format(meta.days) }} días){% endif %}
+            · Dispositivo: <code>{{ meta.device }}</code>
+        </div>
+
+        {% set total_alertas = alerts.transitions_to_abnormal + alerts.jumps_total %}
+        <div class="cover-summary">
+            <div class="summary-item">
+                <div class="summary-num">{{ alerts.transitions_to_abnormal }}</div>
+                <div class="summary-label">Alertas críticas</div>
+            </div>
+            <div class="summary-item">
+                <div class="summary-num">{{ alerts.jumps_total }}</div>
+                <div class="summary-label">Saltos abruptos</div>
+            </div>
+            <div class="summary-item">
+                <div class="summary-num">{{ ok_pct_temp }}%</div>
+                <div class="summary-label">Temp en rango</div>
+            </div>
+            <div class="summary-item">
+                <div class="summary-num">{{ ok_pct_hum }}%</div>
+                <div class="summary-label">Humedad en rango</div>
+            </div>
+        </div>
+
+        <div class="cover-footer">
+            <div>Generado por Tenebris AI Sentinel · {{ meta.generated_iso }}</div>
+        </div>
+    </div>
+</section>
+
+<!-- ============================================================
+     RESUMEN EJECUTIVO
+     ============================================================ -->
+<section class="page">
+    <h1>Resumen ejecutivo</h1>
+    <div class="prose">
+        {% if commentary.summary %}
+            {{ commentary.summary | safe }}
+        {% else %}
+            <p>Durante el periodo del {{ meta.start_iso }} al {{ meta.end_iso }} ({{ meta.hours }}h)
+            el sistema registró <strong>{{ alerts.transitions_to_abnormal }} alertas críticas</strong>
+            (cruces de umbral hacia estado anormal) y <strong>{{ alerts.jumps_total }} saltos
+            abruptos</strong> en sensores interiores.</p>
+        {% endif %}
+    </div>
+
+    <h2>Estado actual del cuarto</h2>
+    <table class="data-table">
+        <thead>
+            <tr><th>Sensor</th><th>Tipo</th><th>Valor</th><th>Estado</th></tr>
+        </thead>
+        <tbody>
+            {% for group_name, group_label in [('TEMP', 'Temperatura'), ('HUM', 'Humedad')] %}
+                {% set g = current.groups[group_name] %}
+                {% for var in g.current.keys() %}
+                    {% set is_ext = var in ('tex', 'hex') %}
+                    {% set value = g.current.get(var) %}
+                    {% set state = (g.alerts.get(var, {})).get('current', 'unknown') %}
+                    <tr class="{% if is_ext %}ext{% elif state == 'abnormal' %}danger{% endif %}">
+                        <td><code>{{ var }}</code></td>
+                        <td>{{ group_label }} {{ 'exterior' if is_ext else 'interior' }}</td>
+                        <td>{{ "%.2f"|format(value) if value is number else "—" }}{{ '°C' if group_name == 'TEMP' else '%' }}</td>
+                        <td>
+                            {% if is_ext %}<span class="pill ext">informativo</span>
+                            {% elif state == 'ok' %}<span class="pill ok">✓ normal</span>
+                            {% elif state == 'abnormal' %}<span class="pill danger">🚨 anormal</span>
+                            {% else %}<span class="pill unknown">—</span>{% endif %}
+                        </td>
+                    </tr>
+                {% endfor %}
+            {% endfor %}
+        </tbody>
+    </table>
+
+    {% if current.extras %}
+    <h2>Estratificación térmica</h2>
+    <table class="data-table">
+        <thead><tr><th>Métrica</th><th>Valor</th></tr></thead>
+        <tbody>
+            {% for var, info in current.extras.items() %}
+            <tr><td>{{ info.label or var }}</td>
+                <td>{{ "%.2f"|format(info.value) if info.value is number else "—" }} {{ info.unit }}</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+</section>
+
+<!-- ============================================================
+     TEMPERATURA
+     ============================================================ -->
+{% if charts.temp_timeline or history.TEMP %}
+<section class="page">
+    <h1>Temperatura</h1>
+
+    {% if charts.temp_timeline %}
+        <img class="chart" src="{{ charts.temp_timeline }}" alt="Timeline temperatura">
+    {% endif %}
+
+    <h2>Estadísticas por sensor</h2>
+    <table class="data-table">
+        <thead>
+            <tr><th>Sensor</th><th>Mín</th><th>Máx</th><th>Promedio</th>
+                <th>% tiempo fuera de rango</th><th>n</th></tr>
+        </thead>
+        <tbody>
+            {% for var, stats in history.TEMP.items() %}
+            {% set is_ext = var in ('tex',) %}
+            <tr class="{% if is_ext %}ext{% endif %}">
+                <td><code>{{ var }}</code></td>
+                <td>{{ stats.min }}°C</td>
+                <td>{{ stats.max }}°C</td>
+                <td>{{ stats.avg }}°C</td>
+                <td>{% if is_ext %}—{% else %}{{ stats.time_outside_pct }}%{% endif %}</td>
+                <td>{{ stats.n }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endif %}
+
+<!-- ============================================================
+     HUMEDAD
+     ============================================================ -->
+{% if charts.hum_timeline or history.HUM %}
+<section class="page">
+    <h1>Humedad</h1>
+
+    {% if charts.hum_timeline %}
+        <img class="chart" src="{{ charts.hum_timeline }}" alt="Timeline humedad">
+    {% endif %}
+
+    <h2>Estadísticas por sensor</h2>
+    <table class="data-table">
+        <thead>
+            <tr><th>Sensor</th><th>Mín</th><th>Máx</th><th>Promedio</th>
+                <th>% tiempo fuera de rango</th><th>n</th></tr>
+        </thead>
+        <tbody>
+            {% for var, stats in history.HUM.items() %}
+            {% set is_ext = var in ('hex',) %}
+            <tr class="{% if is_ext %}ext{% endif %}">
+                <td><code>{{ var }}</code></td>
+                <td>{{ stats.min }}%</td>
+                <td>{{ stats.max }}%</td>
+                <td>{{ stats.avg }}%</td>
+                <td>{% if is_ext %}—{% else %}{{ stats.time_outside_pct }}%{% endif %}</td>
+                <td>{{ stats.n }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endif %}
+
+<!-- ============================================================
+     EVENTOS DESTACADOS
+     ============================================================ -->
+<section class="page">
+    <h1>Eventos destacados</h1>
+
+    {% if commentary.events %}
+    <div class="prose">{{ commentary.events | safe }}</div>
+    {% endif %}
+
+    {% if charts.alerts_by_sensor %}
+        <img class="chart" src="{{ charts.alerts_by_sensor }}" alt="Alertas por sensor">
+    {% endif %}
+
+    {% if alerts.transitions %}
+    <h2>Transiciones de estado ({{ alerts.transitions | length }} de {{ alerts.transitions_total }})</h2>
+    <table class="data-table compact">
+        <thead>
+            <tr><th>Fecha/hora</th><th>Sensor</th><th>Cambio</th><th>Tipo</th><th>Valor</th></tr>
+        </thead>
+        <tbody>
+            {% for t in alerts.transitions[-20:] | reverse %}
+            <tr class="{% if t.to == 'abnormal' %}danger{% elif t.to == 'ok' %}ok{% endif %}">
+                <td>{{ t.ts_iso }}</td>
+                <td><code>{{ t.var }}</code></td>
+                <td>{{ t.from }} → <strong>{{ t.to }}</strong></td>
+                <td>{{ t.kind }}</td>
+                <td>{{ "%.2f"|format(t.value) if t.value is number else "—" }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="prose"><em>Sin transiciones de estado en el periodo consultado.</em></p>
+    {% endif %}
+
+    {% if alerts.jumps %}
+    <h2>Saltos abruptos detectados ({{ alerts.jumps_total }})</h2>
+    <table class="data-table compact">
+        <thead>
+            <tr><th>Fecha/hora</th><th>Sensor</th><th>De</th><th>A</th><th>Δ</th></tr>
+        </thead>
+        <tbody>
+            {% for j in alerts.jumps[-15:] | reverse %}
+            <tr>
+                <td>{{ j.ts_iso }}</td>
+                <td><code>{{ j.var }}</code></td>
+                <td>{{ j.from_value }}</td>
+                <td>{{ j.to_value }}</td>
+                <td><strong>{{ "%+.2f"|format(j.delta) if j.delta is number else "—" }}</strong></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+</section>
+
+<!-- ============================================================
+     PRECISIÓN DEL MODELO
+     ============================================================ -->
+{% if charts.prediction_accuracy or predictions_accuracy.TEMP or predictions_accuracy.HUM %}
+<section class="page">
+    <h1>Precisión del modelo predictivo</h1>
+    <p class="prose">El modelo predice el valor de cada sensor a <strong>+3 minutos</strong>. La tabla
+    muestra el error medio absoluto (MAE) y la raíz del error cuadrático medio (RMSE) durante
+    el periodo. Valores bajos indican mejor precisión.</p>
+
+    {% if charts.prediction_accuracy %}
+        <img class="chart" src="{{ charts.prediction_accuracy }}" alt="MAE por sensor">
+    {% endif %}
+
+    <table class="data-table">
+        <thead><tr><th>Sensor</th><th>Grupo</th><th>MAE</th><th>RMSE</th><th>n</th></tr></thead>
+        <tbody>
+            {% for group in ('TEMP', 'HUM') %}
+                {% for var, stats in predictions_accuracy[group].items() %}
+                <tr>
+                    <td><code>{{ var }}</code></td>
+                    <td>{{ group }}</td>
+                    <td>{{ stats.mae }}</td>
+                    <td>{{ stats.rmse }}</td>
+                    <td>{{ stats.n }}</td>
+                </tr>
+                {% endfor %}
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endif %}
+
+<!-- ============================================================
+     INFRAESTRUCTURA
+     ============================================================ -->
+{% if infrastructure %}
+<section class="page">
+    <h1>Infraestructura externa</h1>
+
+    {% if commentary.infrastructure %}
+    <div class="prose">{{ commentary.infrastructure | safe }}</div>
+    {% endif %}
+
+    {% for cat_label, cat_id in [('Calefacción', 'calefaccion'), ('Ventilación', 'ventilacion'), ('Calidad de aire', 'calidad_aire'), ('Ambiente', 'ambiente')] %}
+        {% set items = [] %}
+        {% for label, info in infrastructure.items() if info.category == cat_id %}
+            {% set _ = items.append((label, info)) %}
+        {% endfor %}
+        {% if items %}
+        <h2>{{ cat_label }}</h2>
+        <table class="data-table">
+            <thead><tr><th>Componente</th><th>Valor</th><th>Última lectura</th></tr></thead>
+            <tbody>
+                {% for label, info in items %}
+                <tr>
+                    <td><strong>{{ info.label }}</strong> <span class="muted">({{ label }})</span></td>
+                    <td>{{ info.value }} {{ info.unit }}</td>
+                    <td>{{ info.ts_iso }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+    {% endfor %}
+</section>
+{% endif %}
+
+<!-- ============================================================
+     RECOMENDACIONES
+     ============================================================ -->
+{% if commentary.recommendations %}
+<section class="page">
+    <h1>Recomendaciones</h1>
+    <div class="disclaimer">
+        ⚠ <em>Las siguientes sugerencias son generadas por inteligencia artificial a partir
+        de los datos observados y no reemplazan el criterio del operador. Verifique con
+        inspección visual antes de aplicar cambios al sistema.</em>
+    </div>
+    <div class="prose">{{ commentary.recommendations | safe }}</div>
+</section>
+{% endif %}
+
+<!-- ============================================================
+     PIE DE REPORTE
+     ============================================================ -->
+<footer class="report-end">
+    <hr>
+    <p class="muted small">
+        Reporte generado automáticamente · Tenebris AI Sentinel<br>
+        Periodo: {{ meta.start_iso }} a {{ meta.end_iso }} · {{ meta.generated_iso }}
+    </p>
+</footer>
+
+</body>
+</html>

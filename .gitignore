@@ -87,3 +87,5 @@ ai-predictor/alert_log.sqlite-journal
 ai-predictor/alert_log.sqlite-wal
 ai-predictor/alert_log.sqlite-shm
 alert_log.sqlite*
+ai-predictor/reports/output/
+ai-predictor/reports/jobs.sqlite*

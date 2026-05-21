@@ -1,0 +1,289 @@
+/* =========================================================================
+   Estilos del reporte ejecutivo Tenebris AI Sentinel.
+   Paleta dorada/oscura coherente con el dashboard.
+   ========================================================================= */
+
+@page {
+    size: A4;
+    margin: 18mm 16mm 22mm 16mm;
+
+    @bottom-center {
+        content: "Tenebris AI Sentinel · Reporte ejecutivo · página " counter(page) " de " counter(pages);
+        color: #607888;
+        font-family: 'Segoe UI', Tahoma, sans-serif;
+        font-size: 8pt;
+    }
+}
+@page :first {
+    margin: 0;
+    @bottom-center { content: ""; }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+    margin: 0;
+    padding: 0;
+    color: #1a2630;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    font-size: 10pt;
+    line-height: 1.5;
+    background: white;
+}
+
+code {
+    background: rgba(232,184,48,0.16);
+    color: #1a2630;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-family: 'Consolas', 'JetBrains Mono', monospace;
+    font-size: 0.9em;
+}
+
+.muted { color: #607888; }
+.small { font-size: 8pt; }
+
+/* ----------------- PORTADA ----------------- */
+.cover {
+    page-break-after: always;
+    width: 100%;
+    height: 297mm;
+    background:
+        linear-gradient(135deg, #1a2630 0%, #243B4A 60%, #344955 100%);
+    color: #e8e0d8;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0;
+    padding: 0;
+}
+
+.cover-inner {
+    width: 70%;
+    text-align: center;
+    position: relative;
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    margin-bottom: 80px;
+}
+.brand-mark {
+    font-size: 48pt;
+}
+.brand-text {
+    text-align: left;
+}
+.brand-title {
+    font-size: 22pt;
+    font-weight: 800;
+    letter-spacing: 6px;
+    color: #E8B830;
+}
+.brand-title span {
+    color: #fff;
+    opacity: 0.7;
+}
+.brand-sub {
+    font-size: 8pt;
+    color: #8aa0b0;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    margin-top: 4px;
+}
+
+.cover-title {
+    font-size: 36pt;
+    font-weight: 900;
+    color: white;
+    letter-spacing: 8px;
+    margin-bottom: 6px;
+}
+.cover-period {
+    font-size: 14pt;
+    color: #E8B830;
+    margin-bottom: 8px;
+    letter-spacing: 1px;
+}
+.cover-meta {
+    color: #8aa0b0;
+    font-size: 9pt;
+    margin-bottom: 50px;
+}
+.cover-meta code {
+    background: rgba(232,184,48,0.20);
+    color: #E8B830;
+}
+
+.cover-summary {
+    display: flex;
+    justify-content: space-around;
+    margin: 40px 0;
+    gap: 16px;
+}
+.summary-item {
+    flex: 1;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(232,184,48,0.30);
+    border-radius: 10px;
+    padding: 16px 8px;
+}
+.summary-num {
+    font-size: 28pt;
+    font-weight: 900;
+    color: #E8B830;
+    line-height: 1;
+}
+.summary-label {
+    font-size: 8pt;
+    color: #8aa0b0;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-top: 8px;
+}
+
+.cover-footer {
+    position: absolute;
+    bottom: -150px;
+    left: 0; right: 0;
+    color: #607888;
+    font-size: 8pt;
+    letter-spacing: 2px;
+}
+
+/* ----------------- PÁGINAS ----------------- */
+.page {
+    page-break-before: always;
+    padding: 0;
+}
+.page:first-of-type {
+    page-break-before: avoid;
+}
+
+h1 {
+    font-size: 20pt;
+    color: #1a2630;
+    border-bottom: 3px solid #E8B830;
+    padding-bottom: 6px;
+    margin-bottom: 16px;
+    margin-top: 0;
+    letter-spacing: 1px;
+}
+h2 {
+    font-size: 13pt;
+    color: #344955;
+    margin-top: 20px;
+    margin-bottom: 8px;
+    border-left: 4px solid #E8B830;
+    padding-left: 10px;
+}
+h3 {
+    font-size: 11pt;
+    color: #344955;
+    margin-top: 14px;
+}
+
+.prose {
+    margin-bottom: 14px;
+    text-align: justify;
+}
+.prose p { margin: 0 0 8px 0; }
+.prose strong { color: #1a2630; }
+
+/* ----------------- CHARTS ----------------- */
+.chart {
+    width: 100%;
+    height: auto;
+    margin: 12px 0;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: white;
+}
+
+/* ----------------- TABLAS ----------------- */
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 10px 0 18px;
+    font-size: 9.5pt;
+    background: white;
+}
+.data-table thead th {
+    background: #1a2630;
+    color: #E8B830;
+    text-align: left;
+    padding: 7px 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-size: 8pt;
+    border-bottom: 2px solid #E8B830;
+}
+.data-table tbody td {
+    padding: 6px 10px;
+    border-bottom: 1px solid #e5e7eb;
+}
+.data-table tbody tr:nth-child(even) td {
+    background: #fafafa;
+}
+.data-table.compact tbody td {
+    padding: 4px 10px;
+    font-size: 9pt;
+}
+.data-table tbody tr.danger td {
+    background: rgba(239,68,68,0.08);
+    border-left: 3px solid #ef4444;
+}
+.data-table tbody tr.danger td:first-child { font-weight: 700; }
+.data-table tbody tr.ok td {
+    background: rgba(52,211,153,0.06);
+}
+.data-table tbody tr.ext td {
+    background: #f8fafc;
+    color: #607888;
+}
+
+/* ----------------- PILLS ----------------- */
+.pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 8pt;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.pill.ok        { background: rgba(22,163,74,0.18); color: #166534; border: 1px solid rgba(22,163,74,0.45); }
+.pill.warn      { background: rgba(245,158,11,0.20); color: #92400e; border: 1px solid rgba(245,158,11,0.55); }
+.pill.danger    { background: rgba(239,68,68,0.18); color: #991b1b; border: 1px solid rgba(239,68,68,0.55); }
+.pill.unknown   { background: #f1f5f9; color: #607888; border: 1px solid #cbd5e1; }
+.pill.ext       { background: #e0e7ef; color: #475569; border: 1px solid #cbd5e1; }
+
+/* ----------------- DISCLAIMER ----------------- */
+.disclaimer {
+    background: rgba(245,158,11,0.10);
+    border-left: 4px solid #f59e0b;
+    padding: 10px 14px;
+    margin-bottom: 16px;
+    border-radius: 4px;
+    font-size: 9pt;
+    color: #78350f;
+}
+
+/* ----------------- FOOTER ----------------- */
+.report-end {
+    margin-top: 30px;
+    page-break-inside: avoid;
+}
+.report-end hr {
+    border: none;
+    border-top: 1px solid #cbd5e1;
+    margin: 20px 0 10px;
+}
+.report-end p {
+    text-align: center;
+    margin: 0;
+}
