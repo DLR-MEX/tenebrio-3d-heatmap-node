@@ -63,6 +63,15 @@ def render_pdf(data: dict, charts: dict, commentary: Optional[dict] = None,
     ok_pct_temp = pct_in_range(data["history"].get("TEMP", {}), {"tex", "tps", "tpi"})
     ok_pct_hum = pct_in_range(data["history"].get("HUM", {}), {"hex"})
 
+    # Hora más caliente del día (del perfil horario de temperatura)
+    hot_hour = None
+    hot_hour_val = None
+    hourly = (data.get("aggregations", {}).get("TEMP", {}) or {}).get("hourly_profile") or []
+    if hourly:
+        peak = max(hourly, key=lambda h: h["avg"])
+        hot_hour = peak["hour"]
+        hot_hour_val = peak["avg"]
+
     html = template.render(
         meta=data["meta"],
         current=data["current"],
@@ -71,11 +80,14 @@ def render_pdf(data: dict, charts: dict, commentary: Optional[dict] = None,
         alerts=data["alerts"],
         predictions_accuracy=data["predictions_accuracy"],
         infrastructure=data.get("infrastructure", {}),
+        aggregations=data.get("aggregations", {}),
         charts=charts,
         commentary=commentary or {},
         css_content=css_content,
         ok_pct_temp=ok_pct_temp,
         ok_pct_hum=ok_pct_hum,
+        hot_hour=hot_hour,
+        hot_hour_val=hot_hour_val,
     )
 
     # Playwright en thread aparte porque su sync_api no convive con un

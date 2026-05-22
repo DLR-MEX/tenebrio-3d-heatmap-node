@@ -193,14 +193,85 @@ h3 {
 .prose p { margin: 0 0 8px 0; }
 .prose strong { color: #1a2630; }
 
+/* ----------------- INTROS Y CAPTIONS ----------------- */
+.section-intro {
+    background: rgba(232,184,48,0.08);
+    border-left: 4px solid #E8B830;
+    padding: 8px 12px;
+    margin: 4px 0 14px;
+    font-size: 9.5pt;
+    border-radius: 0 4px 4px 0;
+}
+.chart-caption {
+    font-size: 8.5pt;
+    color: #607888;
+    margin: 2px 0 4px;
+    font-style: italic;
+}
+.tag-ok { color: #166534; font-weight: 700; }
+.tag-danger { color: #991b1b; font-weight: 700; }
+
+/* ----------------- KPI GRID (panorama del periodo) ----------------- */
+.kpi-grid {
+    display: flex;
+    gap: 10px;
+    margin: 10px 0 18px;
+    flex-wrap: wrap;
+}
+.kpi {
+    flex: 1;
+    min-width: 110px;
+    background: linear-gradient(160deg, #243B4A, #1a2630);
+    color: #e8e0d8;
+    border-radius: 10px;
+    padding: 12px 10px;
+    text-align: center;
+    border: 1px solid #3a5a6a;
+}
+.kpi-icon { font-size: 16pt; }
+.kpi-val {
+    font-size: 19pt;
+    font-weight: 900;
+    color: #E8B830;
+    line-height: 1.1;
+    margin: 2px 0;
+}
+.kpi-label {
+    font-size: 7.5pt;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #8aa0b0;
+}
+.kpi-sub {
+    font-size: 7.5pt;
+    color: #607888;
+    margin-top: 3px;
+}
+
 /* ----------------- CHARTS ----------------- */
 .chart {
     width: 100%;
     height: auto;
-    margin: 12px 0;
+    margin: 8px 0 14px;
     border: 1px solid #cbd5e1;
     border-radius: 6px;
     background: white;
+}
+.donut-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin: 14px 0;
+}
+.chart-donut {
+    width: 38%;
+    height: auto;
+    flex-shrink: 0;
+}
+.donut-text {
+    flex: 1;
+    font-size: 9.5pt;
+    color: #344955;
 }
 
 /* ----------------- TABLAS ----------------- */

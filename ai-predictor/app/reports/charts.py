@@ -1,15 +1,16 @@
 """
 Generacion de graficas para el reporte ejecutivo PDF.
 
-Usa matplotlib backend Agg (server-side) y devuelve cada chart como
-data URL base64 para embed directo en el HTML del reporte.
+Variedad de tipos (no solo lineas) para que el reporte sea entendible
+por cualquier persona:
+  - Heatmap hora x dia       (patron de temperatura por horario)
+  - Barras promedio diario   (con banda min-max)
+  - Perfil horario           (curva del dia tipico)
+  - Comparativa semanal      (mejor vs peor semana del mes)
+  - Donut % tiempo en rango
+  - Barras alertas por sensor
 
-Paleta consistente con el dashboard:
-  - Fondo cuarto:   #1a2630 (no usado en charts del PDF — se usa blanco
-                    para que el papel impreso se vea bien)
-  - Accent dorado:  #E8B830
-  - Texto oscuro:   #1a2630 (sobre blanco)
-  - Estados:        ok #34d399, warn #f59e0b, danger #ef4444
+Backend matplotlib Agg (server-side). Cada chart -> data URL base64.
 """
 
 from __future__ import annotations
@@ -17,95 +18,299 @@ from __future__ import annotations
 import base64
 import io
 import logging
-import time
-from datetime import datetime
 
 log = logging.getLogger("reports.charts")
 
-# Paleta para series multiples (consistente con cards.js del dashboard)
-SERIES_COLORS = [
-    "#0284c7", "#0891b2", "#7c3aed", "#db2777", "#ea580c", "#ca8a04",
-    "#16a34a", "#0d9488", "#0369a1", "#1d4ed8", "#7e22ce", "#be123c",
-]
-
-THRESHOLD_COLOR = "#ef4444"
+# Paleta — fondo claro para impresion
+BG_LIGHT = "#fdfcf7"
+GRID = "#cbd5e1"
+TEXT = "#1a2630"
 ACCENT = "#E8B830"
-BG_LIGHT = "#fdfcf7"   # fondo muy claro, levemente crema
-GRID_COLOR = "#cbd5e1"
-TEXT_DARK = "#1a2630"
+COL_TEMP = "#e07a3f"     # naranja calido para temperatura
+COL_HUM = "#3b82f6"      # azul para humedad
+COL_OK = "#16a34a"
+COL_WARN = "#f59e0b"
+COL_DANGER = "#ef4444"
 
 
 def generate_all_charts(data: dict) -> dict[str, str]:
-    """Genera todas las graficas del reporte y devuelve dict
-    {chart_id: data_url}. Si una falla, se omite (best-effort)."""
+    """Genera todas las graficas y devuelve {chart_id: data_url}."""
     charts: dict[str, str] = {}
+    agg_temp = (data.get("aggregations") or {}).get("TEMP") or {}
+    agg_hum = (data.get("aggregations") or {}).get("HUM") or {}
+    th_temp = (data.get("thresholds") or {}).get("TEMP") or {}
+    th_hum = (data.get("thresholds") or {}).get("HUM") or {}
 
-    try:
-        png = chart_temp_timeline(data)
-        if png:
-            charts["temp_timeline"] = _to_data_url(png)
-    except Exception as e:
-        log.warning("chart_temp_timeline fallo: %s", e)
+    _try(charts, "temp_heatmap", lambda: chart_heatmap(
+        agg_temp.get("heatmap"), "Temperatura por hora y día", "°C", th_temp))
+    _try(charts, "temp_daily", lambda: chart_daily_bars(
+        agg_temp.get("daily"), "Temperatura promedio por día", "°C",
+        COL_TEMP, th_temp))
+    _try(charts, "temp_hourly", lambda: chart_hourly_profile(
+        agg_temp.get("hourly_profile"), "Perfil del día — temperatura", "°C",
+        COL_TEMP, th_temp))
+    _try(charts, "temp_weekly", lambda: chart_weekly_compare(
+        agg_temp.get("weekly"), "Comparativa semanal — temperatura", "°C"))
+    _try(charts, "temp_donut", lambda: chart_range_donut(
+        data.get("history", {}).get("TEMP", {}), ("tex", "tps", "tpi"),
+        "Tiempo en rango óptimo — temperatura"))
 
-    try:
-        png = chart_hum_timeline(data)
-        if png:
-            charts["hum_timeline"] = _to_data_url(png)
-    except Exception as e:
-        log.warning("chart_hum_timeline fallo: %s", e)
+    _try(charts, "hum_heatmap", lambda: chart_heatmap(
+        agg_hum.get("heatmap"), "Humedad por hora y día", "%", th_hum))
+    _try(charts, "hum_daily", lambda: chart_daily_bars(
+        agg_hum.get("daily"), "Humedad promedio por día", "%",
+        COL_HUM, th_hum))
+    _try(charts, "hum_hourly", lambda: chart_hourly_profile(
+        agg_hum.get("hourly_profile"), "Perfil del día — humedad", "%",
+        COL_HUM, th_hum))
+    _try(charts, "hum_weekly", lambda: chart_weekly_compare(
+        agg_hum.get("weekly"), "Comparativa semanal — humedad", "%"))
+    _try(charts, "hum_donut", lambda: chart_range_donut(
+        data.get("history", {}).get("HUM", {}), ("hex",),
+        "Tiempo en rango óptimo — humedad"))
 
-    try:
-        png = chart_alerts_by_sensor(data)
-        if png:
-            charts["alerts_by_sensor"] = _to_data_url(png)
-    except Exception as e:
-        log.warning("chart_alerts_by_sensor fallo: %s", e)
-
-    try:
-        png = chart_prediction_accuracy(data)
-        if png:
-            charts["prediction_accuracy"] = _to_data_url(png)
-    except Exception as e:
-        log.warning("chart_prediction_accuracy fallo: %s", e)
+    _try(charts, "alerts_by_sensor", lambda: chart_alerts_by_sensor(data))
 
     log.info("Charts generados: %s", list(charts.keys()))
     return charts
 
 
-# ---------- charts individuales ----------
+def _try(charts: dict, key: str, fn):
+    try:
+        png = fn()
+        if png:
+            charts[key] = _to_data_url(png)
+    except Exception as e:
+        log.warning("chart %s fallo: %s", key, e)
 
-def chart_temp_timeline(data: dict) -> bytes:
-    """Time series de t1..t5 con lineas de umbral (15-30 C)."""
-    series = [s for s in (data.get("time_series", {}).get("TEMP") or [])
-              if s["var"] not in ("tex", "tps", "tpi") and s["data"]]
-    if not series:
+
+# ---------- charts ----------
+
+def chart_heatmap(heatmap: dict, title: str, unit: str, thresholds: dict) -> bytes:
+    """Heatmap dia (filas) x hora 0-23 (columnas). Color = valor promedio."""
+    if not heatmap or not heatmap.get("values"):
         return b""
-    thresholds = data.get("thresholds", {}).get("TEMP", {})
-    return _line_chart(
-        series, "Temperatura interior — periodo del reporte",
-        unit="°C",
-        threshold_min=thresholds.get("min"),
-        threshold_max=thresholds.get("max"),
-    )
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from matplotlib.colors import LinearSegmentedColormap
+
+    days = heatmap["days"]
+    values = heatmap["values"]  # [n_days][24]
+    arr = np.array([[v if v is not None else np.nan for v in row] for row in values],
+                   dtype=float)
+
+    # Altura proporcional al numero de dias (min 2.5, max 7)
+    h = max(2.5, min(0.42 * len(days) + 1.2, 7))
+    fig, ax = plt.subplots(figsize=(8.5, h), dpi=120)
+    fig.patch.set_facecolor(BG_LIGHT)
+
+    # Colormap: azul (frio) -> verde (optimo) -> naranja/rojo (caliente)
+    cmap = LinearSegmentedColormap.from_list(
+        "clima", ["#2563eb", "#22c55e", "#facc15", "#ef4444"])
+    im = ax.imshow(arr, aspect="auto", cmap=cmap, interpolation="nearest")
+
+    ax.set_xticks(range(0, 24, 2))
+    ax.set_xticklabels([f"{h:02d}h" for h in range(0, 24, 2)], fontsize=7)
+    ax.set_yticks(range(len(days)))
+    ax.set_yticklabels(days, fontsize=7)
+    ax.set_xlabel("Hora del día", fontsize=8, color=TEXT)
+    ax.set_title(title, fontsize=11, fontweight="bold", color=TEXT, pad=10)
+    ax.tick_params(colors=TEXT)
+
+    cbar = fig.colorbar(im, ax=ax, fraction=0.025, pad=0.02)
+    cbar.ax.tick_params(labelsize=7, colors=TEXT)
+    cbar.set_label(unit, fontsize=8, color=TEXT)
+
+    fig.tight_layout()
+    return _save(fig)
 
 
-def chart_hum_timeline(data: dict) -> bytes:
-    """Time series de h1..h5 con umbral 60-90%."""
-    series = [s for s in (data.get("time_series", {}).get("HUM") or [])
-              if s["var"] not in ("hex",) and s["data"]]
-    if not series:
+def chart_daily_bars(daily: list, title: str, unit: str,
+                     color: str, thresholds: dict) -> bytes:
+    """Barras de promedio diario con banda min-max (errorbar)."""
+    if not daily:
         return b""
-    thresholds = data.get("thresholds", {}).get("HUM", {})
-    return _line_chart(
-        series, "Humedad interior — periodo del reporte",
-        unit="%",
-        threshold_min=thresholds.get("min"),
-        threshold_max=thresholds.get("max"),
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    labels = [d["label"] for d in daily]
+    avgs = [d["avg"] for d in daily]
+    mins = [d["min"] for d in daily]
+    maxs = [d["max"] for d in daily]
+    # Error bars: distancia del avg al min y al max
+    err_low = [a - m for a, m in zip(avgs, mins)]
+    err_high = [m - a for a, m in zip(maxs, avgs)]
+
+    fig, ax = plt.subplots(figsize=(8.5, 3.4), dpi=120)
+    fig.patch.set_facecolor(BG_LIGHT)
+    ax.set_facecolor(BG_LIGHT)
+
+    bars = ax.bar(labels, avgs, color=color, edgecolor="white", linewidth=1,
+                  yerr=[err_low, err_high], capsize=3,
+                  error_kw={"ecolor": "#94a3b8", "elinewidth": 1})
+    for bar, a in zip(bars, avgs):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.02,
+                f"{a:g}", ha="center", va="bottom", fontsize=7.5,
+                color=TEXT, fontweight="bold")
+
+    lo, hi = thresholds.get("min"), thresholds.get("max")
+    if lo is not None:
+        ax.axhline(lo, color=COL_DANGER, ls=":", lw=1, alpha=0.6)
+    if hi is not None:
+        ax.axhline(hi, color=COL_DANGER, ls=":", lw=1, alpha=0.6)
+
+    ax.set_title(title, fontsize=11, fontweight="bold", color=TEXT, pad=10)
+    ax.set_ylabel(unit, fontsize=9, color=TEXT)
+    ax.tick_params(colors=TEXT, labelsize=8)
+    plt.setp(ax.get_xticklabels(), rotation=30, ha="right")
+    _clean_axes(ax)
+    fig.tight_layout()
+    return _save(fig)
+
+
+def chart_hourly_profile(hourly: list, title: str, unit: str,
+                         color: str, thresholds: dict) -> bytes:
+    """Curva del dia tipico: promedio por hora 0-23 con area sombreada
+    min-max. Resalta la hora mas caliente."""
+    if not hourly:
+        return b""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    hours = [d["hour"] for d in hourly]
+    avgs = [d["avg"] for d in hourly]
+    mins = [d["min"] for d in hourly]
+    maxs = [d["max"] for d in hourly]
+
+    fig, ax = plt.subplots(figsize=(8.5, 3.2), dpi=120)
+    fig.patch.set_facecolor(BG_LIGHT)
+    ax.set_facecolor(BG_LIGHT)
+
+    ax.fill_between(hours, mins, maxs, color=color, alpha=0.15, label="rango min-máx")
+    ax.plot(hours, avgs, color=color, lw=2.2, marker="o", markersize=3,
+            label="promedio")
+
+    # Resaltar la hora pico (mayor promedio)
+    peak_idx = avgs.index(max(avgs))
+    ax.scatter([hours[peak_idx]], [avgs[peak_idx]], color=COL_DANGER,
+               zorder=5, s=60, edgecolor="white", linewidth=1.2)
+    ax.annotate(f"  pico {avgs[peak_idx]:g}{unit} @ {hours[peak_idx]:02d}h",
+                (hours[peak_idx], avgs[peak_idx]), fontsize=8,
+                color=COL_DANGER, fontweight="bold", va="center")
+
+    lo, hi = thresholds.get("min"), thresholds.get("max")
+    if hi is not None:
+        ax.axhline(hi, color=COL_DANGER, ls=":", lw=1, alpha=0.6)
+    if lo is not None:
+        ax.axhline(lo, color=COL_DANGER, ls=":", lw=1, alpha=0.6)
+
+    ax.set_title(title, fontsize=11, fontweight="bold", color=TEXT, pad=10)
+    ax.set_xlabel("Hora del día", fontsize=9, color=TEXT)
+    ax.set_ylabel(unit, fontsize=9, color=TEXT)
+    ax.set_xticks(range(0, 24, 2))
+    ax.set_xticklabels([f"{h:02d}h" for h in range(0, 24, 2)])
+    ax.tick_params(colors=TEXT, labelsize=8)
+    ax.legend(fontsize=7.5, facecolor=BG_LIGHT, edgecolor=GRID, labelcolor=TEXT)
+    _clean_axes(ax)
+    fig.tight_layout()
+    return _save(fig)
+
+
+def chart_weekly_compare(weekly: list, title: str, unit: str) -> bytes:
+    """Barras por semana, % tiempo en rango. Mejor verde, peor roja."""
+    if not weekly or len(weekly) < 2:
+        return b""  # solo tiene sentido con 2+ semanas
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    labels = []
+    for w in weekly:
+        # "2026-W21" -> "Sem 21"
+        wk = w["week"].split("-W")[-1]
+        labels.append(f"Sem {wk}")
+    pcts = [w["in_range_pct"] for w in weekly]
+    colors = []
+    for w in weekly:
+        if w.get("is_best"):
+            colors.append(COL_OK)
+        elif w.get("is_worst"):
+            colors.append(COL_DANGER)
+        else:
+            colors.append("#94a3b8")
+
+    fig, ax = plt.subplots(figsize=(8.5, 3.0), dpi=120)
+    fig.patch.set_facecolor(BG_LIGHT)
+    ax.set_facecolor(BG_LIGHT)
+
+    bars = ax.bar(labels, pcts, color=colors, edgecolor="white", linewidth=1)
+    for bar, w in zip(bars, weekly):
+        tag = ""
+        if w.get("is_best"):
+            tag = " ★ mejor"
+        elif w.get("is_worst"):
+            tag = " ▼ peor"
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 1,
+                f"{w['in_range_pct']:g}%{tag}", ha="center", va="bottom",
+                fontsize=8, color=TEXT, fontweight="bold")
+
+    ax.set_title(title + " (% tiempo en rango óptimo)", fontsize=11,
+                 fontweight="bold", color=TEXT, pad=10)
+    ax.set_ylabel("% en rango", fontsize=9, color=TEXT)
+    ax.set_ylim(0, 110)
+    ax.tick_params(colors=TEXT, labelsize=8)
+    _clean_axes(ax)
+    fig.tight_layout()
+    return _save(fig)
+
+
+def chart_range_donut(group_history: dict, exclude: tuple, title: str) -> bytes:
+    """Donut: % tiempo en rango vs fuera de rango (sensores interiores)."""
+    if not group_history:
+        return b""
+    total_n = 0
+    outside_weighted = 0.0
+    for var, stats in group_history.items():
+        if var in exclude:
+            continue
+        n = stats.get("n", 0)
+        total_n += n
+        outside_weighted += stats.get("time_outside_pct", 0) / 100 * n
+    if total_n == 0:
+        return b""
+    out_pct = outside_weighted / total_n * 100
+    in_pct = 100 - out_pct
+
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(4.0, 3.2), dpi=120)
+    fig.patch.set_facecolor(BG_LIGHT)
+
+    wedges, _ = ax.pie(
+        [in_pct, out_pct],
+        colors=[COL_OK, COL_DANGER],
+        startangle=90,
+        counterclock=False,
+        wedgeprops={"width": 0.42, "edgecolor": BG_LIGHT, "linewidth": 2},
     )
+    # Texto central
+    ax.text(0, 0.08, f"{in_pct:.0f}%", ha="center", va="center",
+            fontsize=24, fontweight="bold", color=COL_OK)
+    ax.text(0, -0.22, "en rango", ha="center", va="center",
+            fontsize=9, color=TEXT)
+    ax.set_title(title, fontsize=10, fontweight="bold", color=TEXT, pad=8)
+    fig.tight_layout()
+    return _save(fig)
 
 
 def chart_alerts_by_sensor(data: dict) -> bytes:
-    """Bar chart con conteo de transiciones por sensor."""
+    """Barras horizontales: transiciones por sensor."""
     counts = (data.get("alerts") or {}).get("transitions_by_var") or {}
     if not counts:
         return b""
@@ -113,136 +318,43 @@ def chart_alerts_by_sensor(data: dict) -> bytes:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    # Ordenar por count desc
-    items = sorted(counts.items(), key=lambda kv: -kv[1])
+    items = sorted(counts.items(), key=lambda kv: kv[1])
     vars_ = [k for k, _ in items]
     vals = [v for _, v in items]
+    colors = [COL_TEMP if v.startswith("t") else COL_HUM for v in vars_]
 
-    fig, ax = plt.subplots(figsize=(8, 3.2), dpi=120)
+    fig, ax = plt.subplots(figsize=(8.5, max(2.2, 0.45 * len(vars_) + 1)), dpi=120)
     fig.patch.set_facecolor(BG_LIGHT)
     ax.set_facecolor(BG_LIGHT)
 
-    # Color por tipo de sensor (temp = azulado, hum = rosado)
-    colors = ["#0284c7" if v.startswith("t") else "#db2777" for v in vars_]
-    bars = ax.bar(vars_, vals, color=colors, edgecolor="white", linewidth=1)
+    bars = ax.barh(vars_, vals, color=colors, edgecolor="white", linewidth=1)
+    for bar, v in zip(bars, vals):
+        ax.text(v + 0.05, bar.get_y() + bar.get_height() / 2, str(v),
+                va="center", fontsize=9, color=TEXT, fontweight="bold")
 
-    for bar, val in zip(bars, vals):
-        ax.text(bar.get_x() + bar.get_width() / 2, val + 0.1, str(val),
-                ha="center", va="bottom", fontsize=9, color=TEXT_DARK, fontweight="bold")
-
-    ax.set_title("Transiciones de estado por sensor (interior)",
-                 color=TEXT_DARK, fontsize=11, fontweight="bold", pad=12)
-    ax.set_ylabel("Transiciones", color=TEXT_DARK, fontsize=9)
-    ax.tick_params(colors=TEXT_DARK, labelsize=9)
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    ax.spines["left"].set_color(GRID_COLOR)
-    ax.spines["bottom"].set_color(GRID_COLOR)
-    ax.yaxis.grid(True, color=GRID_COLOR, alpha=0.4, linewidth=0.5)
-    ax.set_axisbelow(True)
-
+    ax.set_title("Veces que cada sensor cambió de estado", fontsize=11,
+                 fontweight="bold", color=TEXT, pad=10)
+    ax.set_xlabel("Número de cambios", fontsize=9, color=TEXT)
+    ax.tick_params(colors=TEXT, labelsize=9)
+    _clean_axes(ax)
+    ax.spines["bottom"].set_visible(True)
     fig.tight_layout()
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", facecolor=BG_LIGHT, dpi=120)
-    plt.close(fig)
-    return buf.getvalue()
-
-
-def chart_prediction_accuracy(data: dict) -> bytes:
-    """Bar chart con MAE por sensor (precision del modelo GRU)."""
-    acc = data.get("predictions_accuracy") or {}
-    items = []
-    for group in ("TEMP", "HUM"):
-        for var, stats in (acc.get(group) or {}).items():
-            items.append((var, stats["mae"], group))
-    if not items:
-        return b""
-
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    items.sort(key=lambda x: (x[2], x[0]))
-    vars_ = [x[0] for x in items]
-    maes = [x[1] for x in items]
-    colors = ["#0284c7" if g == "TEMP" else "#db2777" for _, _, g in items]
-
-    fig, ax = plt.subplots(figsize=(8, 3.2), dpi=120)
-    fig.patch.set_facecolor(BG_LIGHT)
-    ax.set_facecolor(BG_LIGHT)
-
-    bars = ax.bar(vars_, maes, color=colors, edgecolor="white", linewidth=1)
-    for bar, val in zip(bars, maes):
-        ax.text(bar.get_x() + bar.get_width() / 2, val + 0.005, f"{val:.2f}",
-                ha="center", va="bottom", fontsize=8, color=TEXT_DARK)
-
-    ax.set_title("Precisión del modelo predictivo (error medio absoluto, +3 min)",
-                 color=TEXT_DARK, fontsize=11, fontweight="bold", pad=12)
-    ax.set_ylabel("MAE", color=TEXT_DARK, fontsize=9)
-    ax.tick_params(colors=TEXT_DARK, labelsize=9)
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    ax.spines["left"].set_color(GRID_COLOR)
-    ax.spines["bottom"].set_color(GRID_COLOR)
-    ax.yaxis.grid(True, color=GRID_COLOR, alpha=0.4, linewidth=0.5)
-    ax.set_axisbelow(True)
-
-    fig.tight_layout()
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", facecolor=BG_LIGHT, dpi=120)
-    plt.close(fig)
-    return buf.getvalue()
+    return _save(fig)
 
 
 # ---------- helpers ----------
 
-def _line_chart(series_list: list, title: str, unit: str,
-                threshold_min: float = None, threshold_max: float = None) -> bytes:
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    from matplotlib.dates import DateFormatter, AutoDateLocator
-
-    fig, ax = plt.subplots(figsize=(8.5, 3.5), dpi=120)
-    fig.patch.set_facecolor(BG_LIGHT)
-    ax.set_facecolor(BG_LIGHT)
-
-    for i, s in enumerate(series_list):
-        data = s["data"]
-        if not data:
-            continue
-        xs = [datetime.fromtimestamp(p[0] / 1000) for p in data]
-        ys = [p[1] for p in data]
-        color = SERIES_COLORS[i % len(SERIES_COLORS)]
-        ax.plot(xs, ys, color=color, linewidth=1.5, label=s["var"])
-
-    # Umbrales como lineas rojas punteadas
-    if threshold_min is not None:
-        ax.axhline(y=threshold_min, color=THRESHOLD_COLOR, linestyle=":",
-                   linewidth=1, alpha=0.7, label=f"min {threshold_min}")
-    if threshold_max is not None:
-        ax.axhline(y=threshold_max, color=THRESHOLD_COLOR, linestyle=":",
-                   linewidth=1, alpha=0.7, label=f"max {threshold_max}")
-
-    ax.set_title(title, color=TEXT_DARK, fontsize=11, fontweight="bold", pad=10)
-    ax.set_ylabel(unit, color=TEXT_DARK, fontsize=9)
-    ax.tick_params(colors=TEXT_DARK, labelsize=8)
-    ax.legend(loc="best", fontsize=7, frameon=True, facecolor=BG_LIGHT,
-              edgecolor=GRID_COLOR, labelcolor=TEXT_DARK, ncol=3)
-
+def _clean_axes(ax):
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
-    ax.spines["left"].set_color(GRID_COLOR)
-    ax.spines["bottom"].set_color(GRID_COLOR)
-    ax.grid(True, color=GRID_COLOR, alpha=0.3, linewidth=0.5)
+    ax.spines["left"].set_color(GRID)
+    ax.spines["bottom"].set_color(GRID)
+    ax.grid(True, color=GRID, alpha=0.3, linewidth=0.5)
     ax.set_axisbelow(True)
 
-    locator = AutoDateLocator()
-    ax.xaxis.set_major_locator(locator)
-    ax.xaxis.set_major_formatter(DateFormatter("%d %b %H:%M"))
-    fig.autofmt_xdate(rotation=0, ha="center")
 
-    fig.tight_layout()
+def _save(fig) -> bytes:
+    import matplotlib.pyplot as plt
     buf = io.BytesIO()
     fig.savefig(buf, format="png", facecolor=BG_LIGHT, dpi=120)
     plt.close(fig)

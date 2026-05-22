@@ -23,19 +23,28 @@ from typing import Optional
 
 log = logging.getLogger("reports.commentary")
 
-SYSTEM_PROMPT = """Eres un analista técnico que redacta secciones de un reporte ejecutivo \
-sobre el monitoreo de un cuarto de cría de tenebrios. Tu rol:
+SYSTEM_PROMPT = """Eres quien redacta un reporte ejecutivo sobre un cuarto de cría \
+de tenebrios (escarabajos). El reporte lo lee gente que NO es técnica: dueños del \
+negocio, supervisores, operadores. Tu rol:
 
-- Escribe en español, tono profesional pero claro.
-- Sé conciso: cumple el largo solicitado, ni más ni menos.
+- Escribe en español SENCILLO y claro. Como si le explicaras a alguien
+  que no sabe de sensores ni de estadística.
+- EVITA jerga técnica. No digas "MAE", "RMSE", "transición de estado",
+  "desviación estándar". Di las cosas en simple: "se salió del rango",
+  "hubo un cambio brusco", "el modelo acertó/falló".
+- Usa comparaciones y contexto: en lugar de "27.3°C promedio", di
+  "una temperatura agradable, dentro de lo ideal" o "más caliente de
+  lo recomendado".
+- Sé concreto y breve. Cumple el largo solicitado.
 - USA los datos que se te pasan; NO inventes números ni eventos.
-- Si los datos son escasos o nulos, dilo explícitamente.
-- Distingue sensores INTERIORES (t1-t5, h1-h5) de EXTERIORES (tex, hex).
-  Los exteriores son informativos, NO se reportan como alertas.
-- Usa Markdown ligero: **negritas** para resaltar, listas con guiones
-  para enumeraciones. NO incluyas headers (#, ##) — el reporte ya los
-  tiene.
-- NO repitas la introducción del reporte ni las fechas en cada sección.
+- Si los datos son escasos o nulos, dilo claramente y sin alarmar.
+- Los tenebrios necesitan: temperatura 15-30°C y humedad 60-90%.
+  Fuera de eso, su crecimiento se ve afectado.
+- Los sensores de afuera (tex, hex) son solo referencia del clima
+  exterior — NO son alertas.
+- Markdown ligero: **negritas** para lo importante, listas con guiones.
+  NO uses títulos (#, ##) — el reporte ya los tiene.
+- NO repitas las fechas del periodo en cada sección.
 """
 
 
@@ -58,6 +67,13 @@ def generate_commentary(agent, data: dict) -> dict:
         agent, data, "events", _prompt_events,
         fallback=_fallback_events(data),
     )
+    # Seccion semanal: solo si el periodo cubre 2+ semanas
+    weekly_temp = (data.get("aggregations", {}).get("TEMP", {}) or {}).get("weekly") or []
+    if len(weekly_temp) >= 2:
+        sections["weekly"] = _safe_section(
+            agent, data, "weekly", _prompt_weekly,
+            fallback=_fallback_weekly(data),
+        )
     if data.get("infrastructure"):
         sections["infrastructure"] = _safe_section(
             agent, data, "infrastructure", _prompt_infrastructure,
@@ -173,6 +189,38 @@ NO inventes causas — solo sugiere posibilidades plausibles.
 """
 
 
+def _prompt_weekly(data: dict) -> str:
+    weekly_t = (data.get("aggregations", {}).get("TEMP", {}) or {}).get("weekly") or []
+    weekly_h = (data.get("aggregations", {}).get("HUM", {}) or {}).get("weekly") or []
+
+    def fmt(weeks, unit):
+        lines = []
+        for w in weeks:
+            wk = w["week"].split("-W")[-1]
+            tag = " (MEJOR)" if w.get("is_best") else (" (PEOR)" if w.get("is_worst") else "")
+            lines.append(f"  Semana {wk}: promedio {w['avg']}{unit}, "
+                        f"{w['in_range_pct']}% del tiempo en rango óptimo{tag}")
+        return "\n".join(lines)
+
+    return f"""DATOS POR SEMANA:
+
+Temperatura:
+{fmt(weekly_t, '°C')}
+
+Humedad:
+{fmt(weekly_h, '%')}
+
+INSTRUCCIONES:
+Redacta la sección "COMPARATIVA SEMANAL" en 1-2 párrafos cortos. Explica
+de forma SENCILLA:
+- Cuál fue la mejor semana y cuál la que necesitó más atención, y por qué.
+- Si hubo una tendencia (ej. "fue mejorando" o "empeoró hacia el final").
+- Qué semana vigilar más de cerca.
+Habla como para alguien que no es técnico. Ej: "La semana 21 fue la más
+estable: el cuarto estuvo en condiciones ideales casi todo el tiempo."
+"""
+
+
 def _prompt_infrastructure(data: dict) -> str:
     infra = data.get("infrastructure", {})
     by_cat = {}
@@ -257,6 +305,22 @@ def _fallback_events(data: dict) -> str:
 def _fallback_infrastructure(data: dict) -> str:
     n = len(data.get("infrastructure", {}))
     return f"<p>Estado actual de {n} componentes de infraestructura externa registrado.</p>"
+
+
+def _fallback_weekly(data: dict) -> str:
+    weekly = (data.get("aggregations", {}).get("TEMP", {}) or {}).get("weekly") or []
+    best = next((w for w in weekly if w.get("is_best")), None)
+    worst = next((w for w in weekly if w.get("is_worst")), None)
+    parts = []
+    if best:
+        wk = best["week"].split("-W")[-1]
+        parts.append(f"La semana {wk} fue la más estable ({best['in_range_pct']}% "
+                     f"del tiempo en rango óptimo).")
+    if worst:
+        wk = worst["week"].split("-W")[-1]
+        parts.append(f"La semana {wk} necesitó más atención ({worst['in_range_pct']}%).")
+    return "<p>" + " ".join(parts) + "</p>" if parts else \
+        "<p>Comparación semanal disponible en las gráficas.</p>"
 
 
 def _fallback_recommendations(data: dict) -> str:

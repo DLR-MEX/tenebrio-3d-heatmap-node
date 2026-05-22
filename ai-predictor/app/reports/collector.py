@@ -47,7 +47,7 @@ def collect_period_data(
     start_ts: float,                  # epoch seconds
     end_ts: float,
     include_time_series: bool = True,
-    max_history_points: int = 500,
+    max_history_points: int = 4000,   # suficiente para heatmaps de varios dias
 ) -> dict:
     """Recolecta todos los datos necesarios para un reporte del periodo."""
     from app.service import (
@@ -192,6 +192,21 @@ def collect_period_data(
                 }
         except Exception as e:
             log.warning("Error infra var=%s: %s", label, e)
+
+    # --- Agregaciones temporales (por dia, hora, semana) ---
+    # Estas alimentan los charts variados del reporte: heatmap hora x dia,
+    # promedio diario, perfil horario, comparativa semanal.
+    from app.reports.aggregations import compute_aggregations
+    out["aggregations"] = {
+        "TEMP": compute_aggregations(
+            out["time_series"]["TEMP"], "TEMP",
+            TEMP_OPTIMAL_MIN, TEMP_OPTIMAL_MAX,
+        ),
+        "HUM": compute_aggregations(
+            out["time_series"]["HUM"], "HUM",
+            HUM_OPTIMAL_MIN, HUM_OPTIMAL_MAX,
+        ),
+    }
 
     log.info(
         "Reporte recolectado: %.1fh, %d transiciones, %d saltos, %d sensores",
