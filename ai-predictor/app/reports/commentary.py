@@ -44,6 +44,7 @@ negocio, supervisores, operadores. Tu rol:
   exterior — NO son alertas.
 - Markdown ligero: **negritas** para lo importante, listas con guiones.
   NO uses títulos (#, ##) — el reporte ya los tiene.
+- NO uses emojis. Es un documento profesional.
 - NO repitas las fechas del periodo en cada sección.
 """
 
@@ -243,9 +244,10 @@ CONTEXTO TECNICO:
 - Amoníaco >25 ppm es crítico; <25 ppm es normal.
 
 INSTRUCCIONES:
-Redacta UN solo párrafo (60-100 palabras) describiendo el estado de la
-infraestructura. Si todo se ve normal, dilo. Si hay anomalías (ej. termo
-frío vs solar caliente, NH3 alto, ventilación apagada), señálalo.
+Redacta UN párrafo BREVE (máximo 50 palabras) con lo esencial del estado
+de la infraestructura. Si todo está normal, una frase basta. Si hay algo
+raro (termo frío vs solar caliente, NH3 alto, ventilación apagada),
+menciónalo en simple. NO listes cada componente — solo lo relevante.
 """
 
 

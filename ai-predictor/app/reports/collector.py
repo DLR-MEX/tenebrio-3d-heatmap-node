@@ -47,7 +47,7 @@ def collect_period_data(
     start_ts: float,                  # epoch seconds
     end_ts: float,
     include_time_series: bool = True,
-    max_history_points: int = 4000,   # suficiente para heatmaps de varios dias
+    max_history_points: int = 15000,  # >1 semana a 1 muestra/min
 ) -> dict:
     """Recolecta todos los datos necesarios para un reporte del periodo."""
     from app.service import (

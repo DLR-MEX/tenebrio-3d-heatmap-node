@@ -13,7 +13,6 @@
 <section class="cover">
     <div class="cover-inner">
         <div class="brand">
-            <div class="brand-mark">🪲</div>
             <div class="brand-text">
                 <div class="brand-title">TENEBRIS <span>AI</span> SENTINEL</div>
                 <div class="brand-sub">CONDOR · monitoreo inteligente</div>
@@ -40,10 +39,6 @@
                 <div class="summary-num">{{ alerts.transitions_to_abnormal }}</div>
                 <div class="summary-label">Alertas críticas</div>
             </div>
-            <div class="summary-item">
-                <div class="summary-num">{{ alerts.jumps_total }}</div>
-                <div class="summary-label">Cambios bruscos</div>
-            </div>
         </div>
 
         <div class="cover-footer">
@@ -63,18 +58,48 @@
         {% else %}
             <p>Durante el periodo del {{ meta.start_iso }} al {{ meta.end_iso }}
             el sistema registró <strong>{{ alerts.transitions_to_abnormal }} alertas
-            críticas</strong> y <strong>{{ alerts.jumps_total }} cambios bruscos</strong>
-            en sensores interiores.</p>
+            críticas</strong> en sensores interiores.</p>
         {% endif %}
     </div>
+
+    {% set to = aggregations.TEMP.overall %}
+    {% set ho = aggregations.HUM.overall %}
+    {% if to or ho %}
+    <h2>Cifras del periodo</h2>
+    <table class="data-table">
+        <thead>
+            <tr><th>Métrica</th><th>Temperatura</th><th>Humedad</th></tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>Promedio</td>
+                <td>{{ to.avg if to.avg is defined else "—" }} °C</td>
+                <td>{{ ho.avg if ho.avg is defined else "—" }} %</td>
+            </tr>
+            <tr>
+                <td>Mediana</td>
+                <td>{{ to.median if to.median is defined else "—" }} °C</td>
+                <td>{{ ho.median if ho.median is defined else "—" }} %</td>
+            </tr>
+            <tr>
+                <td>Día más alto</td>
+                <td>{% if to.hottest_day %}{{ to.hottest_day.label }} ({{ to.hottest_day.avg }} °C){% else %}—{% endif %}</td>
+                <td>{% if ho.hottest_day %}{{ ho.hottest_day.label }} ({{ ho.hottest_day.avg }} %){% else %}—{% endif %}</td>
+            </tr>
+            <tr>
+                <td>Día más bajo</td>
+                <td>{% if to.coldest_day %}{{ to.coldest_day.label }} ({{ to.coldest_day.avg }} °C){% else %}—{% endif %}</td>
+                <td>{% if ho.coldest_day %}{{ ho.coldest_day.label }} ({{ ho.coldest_day.avg }} %){% else %}—{% endif %}</td>
+            </tr>
+        </tbody>
+    </table>
+    {% endif %}
 
     <h2>Panorama del periodo</h2>
     <div class="kpi-grid">
         {% set tpeaks = aggregations.TEMP.peaks %}
-        {% set hpeaks = aggregations.HUM.peaks %}
         {% if tpeaks.hottest %}
         <div class="kpi">
-            <div class="kpi-icon">🔥</div>
             <div class="kpi-val">{{ tpeaks.hottest.value }}°C</div>
             <div class="kpi-label">Momento más caliente</div>
             <div class="kpi-sub">{{ tpeaks.hottest.ts_iso }}</div>
@@ -82,7 +107,6 @@
         {% endif %}
         {% if tpeaks.coldest %}
         <div class="kpi">
-            <div class="kpi-icon">❄️</div>
             <div class="kpi-val">{{ tpeaks.coldest.value }}°C</div>
             <div class="kpi-label">Momento más frío</div>
             <div class="kpi-sub">{{ tpeaks.coldest.ts_iso }}</div>
@@ -90,14 +114,12 @@
         {% endif %}
         {% if hot_hour is not none %}
         <div class="kpi">
-            <div class="kpi-icon">🕐</div>
             <div class="kpi-val">{{ "%02d"|format(hot_hour) }}:00</div>
             <div class="kpi-label">Hora más caliente del día</div>
             <div class="kpi-sub">en promedio {{ hot_hour_val }}°C</div>
         </div>
         {% endif %}
         <div class="kpi">
-            <div class="kpi-icon">📅</div>
             <div class="kpi-val">{{ aggregations.TEMP.daily | length }}</div>
             <div class="kpi-label">Días con datos</div>
             <div class="kpi-sub">{{ aggregations.TEMP.samples }} mediciones</div>
@@ -111,12 +133,12 @@
 <section class="page">
     <h1>Temperatura</h1>
     <p class="section-intro">Rango óptimo para la cría: <strong>{{ thresholds.TEMP.min }}–{{ thresholds.TEMP.max }} °C</strong>.
-    Las gráficas muestran cómo se comportó la temperatura interior (promedio de los 5 sensores del cuarto).</p>
+    Las gráficas muestran la temperatura interior (promedio de los 5 sensores del cuarto).</p>
 
     {% if charts.temp_heatmap %}
         <h2>¿A qué horas hace más calor?</h2>
         <p class="chart-caption">Cada celda es el promedio de esa hora en ese día.
-        Colores cálidos = más caliente. Permite ver de un vistazo los patrones del día.</p>
+        Colores cálidos = más caliente.</p>
         <img class="chart" src="{{ charts.temp_heatmap }}" alt="Heatmap temperatura">
     {% endif %}
 
@@ -128,21 +150,18 @@
     {% endif %}
 
     {% if charts.temp_daily %}
-        <h2>Promedio por día</h2>
-        <p class="chart-caption">Barra = promedio del día. Las líneas verticales
-        muestran el mínimo y máximo de ese día.</p>
+        <h2>Promedio por día frente al rango ideal</h2>
+        <p class="chart-caption">Barra = promedio del día. La franja verde es el rango
+        ideal — se busca que las barras caigan dentro de ella. Las líneas verticales
+        muestran el mínimo y máximo de cada día.</p>
         <img class="chart" src="{{ charts.temp_daily }}" alt="Promedio diario temperatura">
     {% endif %}
 
-    {% if charts.temp_donut %}
-        <div class="donut-row">
-            <img class="chart-donut" src="{{ charts.temp_donut }}" alt="Tiempo en rango temperatura">
-            <div class="donut-text">
-                <p>Este indicador resume <strong>cuánto tiempo</strong> la temperatura
-                interior estuvo dentro del rango óptimo durante todo el periodo.
-                Mientras más cerca de 100%, mejor.</p>
-            </div>
-        </div>
+    {% if charts.temp_in_range %}
+        <h2>Tiempo en condiciones óptimas</h2>
+        <p class="chart-caption">Qué porcentaje del día la temperatura estuvo dentro
+        del rango ideal. Verde = buen día, ámbar = regular, rojo = requiere atención.</p>
+        <img class="chart" src="{{ charts.temp_in_range }}" alt="Tiempo en rango temperatura">
     {% endif %}
 </section>
 
@@ -167,19 +186,17 @@
     {% endif %}
 
     {% if charts.hum_daily %}
-        <h2>Promedio por día</h2>
-        <p class="chart-caption">Barra = promedio del día. Líneas = mínimo y máximo.</p>
+        <h2>Promedio por día frente al rango ideal</h2>
+        <p class="chart-caption">Barra = promedio del día. La franja verde es el
+        rango ideal.</p>
         <img class="chart" src="{{ charts.hum_daily }}" alt="Promedio diario humedad">
     {% endif %}
 
-    {% if charts.hum_donut %}
-        <div class="donut-row">
-            <img class="chart-donut" src="{{ charts.hum_donut }}" alt="Tiempo en rango humedad">
-            <div class="donut-text">
-                <p>Cuánto tiempo la humedad interior estuvo dentro del rango óptimo
-                durante el periodo.</p>
-            </div>
-        </div>
+    {% if charts.hum_in_range %}
+        <h2>Tiempo en condiciones óptimas</h2>
+        <p class="chart-caption">Qué porcentaje del día la humedad estuvo dentro
+        del rango ideal.</p>
+        <img class="chart" src="{{ charts.hum_in_range }}" alt="Tiempo en rango humedad">
     {% endif %}
 </section>
 
@@ -190,8 +207,8 @@
 <section class="page">
     <h1>Comparativa semanal</h1>
     <p class="section-intro">Comparación del desempeño semana por semana. La semana
-    marcada en <span class="tag-ok">verde</span> fue la mejor (más tiempo en rango óptimo);
-    la marcada en <span class="tag-danger">rojo</span> fue la que necesitó más atención.</p>
+    en <span class="tag-ok">verde</span> fue la mejor; la marcada en
+    <span class="tag-danger">rojo</span> fue la que necesitó más atención.</p>
 
     {% if commentary.weekly %}
     <div class="prose">{{ commentary.weekly | safe }}</div>
@@ -218,10 +235,6 @@
     <div class="prose">{{ commentary.events | safe }}</div>
     {% endif %}
 
-    {% if charts.alerts_by_sensor %}
-        <img class="chart" src="{{ charts.alerts_by_sensor }}" alt="Alertas por sensor">
-    {% endif %}
-
     {% if alerts.transitions %}
     <h2>Cronología de cambios de estado</h2>
     <table class="data-table compact">
@@ -234,9 +247,9 @@
                 <td>{{ t.ts_iso }}</td>
                 <td><code>{{ t.var }}</code></td>
                 <td>
-                    {%- if t.to == 'abnormal' %}🚨 entró en alerta
-                    {%- elif t.to == 'ok' %}✓ se normalizó
-                    {%- else %}{{ t.from }} → {{ t.to }}{% endif %}
+                    {%- if t.to == 'abnormal' %}Entró en alerta
+                    {%- elif t.to == 'ok' %}Se normalizó
+                    {%- else %}{{ t.from }} &rarr; {{ t.to }}{% endif %}
                 </td>
                 <td>{{ "%.2f"|format(t.value) if t.value is number else "—" }}</td>
             </tr>
@@ -247,64 +260,15 @@
     <p class="prose"><em>No hubo cambios de estado en el periodo — el cuarto se
     mantuvo estable.</em></p>
     {% endif %}
-
-    {% if alerts.jumps %}
-    <h2>Cambios bruscos detectados</h2>
-    <p class="chart-caption">Saltos rápidos de valor entre mediciones consecutivas
-    (posible puerta abierta, equipo apagado, etc).</p>
-    <table class="data-table compact">
-        <thead>
-            <tr><th>Fecha y hora</th><th>Sensor</th><th>De</th><th>A</th><th>Cambio</th></tr>
-        </thead>
-        <tbody>
-            {% for j in alerts.jumps[-12:] | reverse %}
-            <tr>
-                <td>{{ j.ts_iso }}</td>
-                <td><code>{{ j.var }}</code></td>
-                <td>{{ j.from_value }}</td>
-                <td>{{ j.to_value }}</td>
-                <td><strong>{{ "%+.2f"|format(j.delta) if j.delta is number else "—" }}</strong></td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-    {% endif %}
 </section>
 
 <!-- ============================================================
-     INFRAESTRUCTURA
+     INFRAESTRUCTURA (resumida — solo texto, sin tablas)
      ============================================================ -->
-{% if infrastructure %}
+{% if infrastructure and commentary.infrastructure %}
 <section class="page">
     <h1>Infraestructura del sistema</h1>
-    <p class="section-intro">Estado de los equipos que dan soporte al cuarto:
-    calefacción, ventilación y calidad del aire.</p>
-
-    {% if commentary.infrastructure %}
     <div class="prose">{{ commentary.infrastructure | safe }}</div>
-    {% endif %}
-
-    {% for cat_label, cat_id in [('Calefacción', 'calefaccion'), ('Ventilación', 'ventilacion'), ('Calidad de aire', 'calidad_aire'), ('Ambiente', 'ambiente')] %}
-        {% set items = [] %}
-        {% for label, info in infrastructure.items() if info.category == cat_id %}
-            {% set _ = items.append((label, info)) %}
-        {% endfor %}
-        {% if items %}
-        <h2>{{ cat_label }}</h2>
-        <table class="data-table">
-            <thead><tr><th>Componente</th><th>Valor</th><th>Última lectura</th></tr></thead>
-            <tbody>
-                {% for label, info in items %}
-                <tr>
-                    <td><strong>{{ info.label }}</strong></td>
-                    <td>{{ info.value }} {{ info.unit }}</td>
-                    <td>{{ info.ts_iso }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-        {% endif %}
-    {% endfor %}
 </section>
 {% endif %}
 
@@ -315,7 +279,7 @@
 <section class="page">
     <h1>Recomendaciones</h1>
     <div class="disclaimer">
-        ⚠ <em>Las siguientes sugerencias son generadas por inteligencia artificial
+        <em>Las siguientes sugerencias son generadas por inteligencia artificial
         a partir de los datos observados y no reemplazan el criterio del operador.
         Verifique con inspección visual antes de aplicar cambios al sistema.</em>
     </div>

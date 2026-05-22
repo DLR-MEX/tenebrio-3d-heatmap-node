@@ -1,0 +1,30 @@
+#,Sensor,Machine,Variable,Transmision Interval,Origen
+1,TEMPERATURA EXTERIOR,EXTERIOR,tex,1 min,confirmado-dashboard
+2,HUMEDAD EXTERIOR,EXTERIOR,hex,1 min,codigo-no-visto-en-MQTT
+3,HUMEDAD GENERAL,CUARTO,hum_general,1 min,confirmado-dashboard
+4,SALIDA PISO,PISO,temperatura1,1 min,confirmado-dashboard
+5,SOLAR,EXTERIOR,temperatura2,1 min,confirmado-dashboard
+6,MEDIO PISO,PISO,temperatura3,1 min,confirmado-dashboard
+7,ENTRADA CUARTO,PISO,temperatura4,1 min,confirmado-dashboard
+8,TERMO,EXTERIOR,temperatura5,1 min,confirmado-dashboard
+9,BAJADA,EXTERIOR,temperatura6,1 min,solo-usuario
+10,NIVEL BAJO,EXTERIOR,nivel-bajo,1 min,solo-usuario
+11,NIVEL ALTO,EXTERIOR,nivel-alto,1 min,solo-usuario
+12,VALVULA 1,EXTERIOR,valvula-1,1 min,solo-usuario
+13,VALVULA 2,EXTERIOR,valvula-2,1 min,solo-usuario
+14,VALVULA 3,EXTERIOR,valvula-3,1 min,solo-usuario
+15,TEMPERATURA CUARTO 1,CUARTO,t1,1 min,confirmado-dashboard
+16,TEMPERATURA CUARTO 2,CUARTO,t2,1 min,confirmado-dashboard
+17,TEMPERATURA CUARTO 3,CUARTO,t3,1 min,confirmado-dashboard
+18,TEMPERATURA CUARTO 4,CUARTO,t4,1 min,confirmado-dashboard
+19,TEMPERATURA CUARTO 5,CUARTO,t5,1 min,confirmado-dashboard
+20,HUMEDAD CUARTO 1,CUARTO,h1,1 min,confirmado-dashboard
+21,HUMEDAD CUARTO 2,CUARTO,h2,1 min,confirmado-dashboard
+22,HUMEDAD CUARTO 3,CUARTO,h3,1 min,confirmado-dashboard
+23,HUMEDAD CUARTO 4,CUARTO,h4,1 min,confirmado-dashboard
+24,HUMEDAD CUARTO 5,CUARTO,h5,1 min,confirmado-dashboard
+25,TEMPERATURA PROMEDIO SUPERIOR,CUARTO,tps,1 min,confirmado-dashboard-calculado
+26,TEMPERATURA PROMEDIO INFERIOR,CUARTO,tpi,1 min,confirmado-dashboard-calculado
+27,VENTILADOR,CUARTO,ventilador,1 min,confirmado-dashboard
+28,EXTRACTOR,CUARTO,extractor,1 min,confirmado-dashboard
+29,AMONIACO (NH3),CUARTO,amoniaco,1 min,confirmado-dashboard

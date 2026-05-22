@@ -57,15 +57,47 @@ TEMP_OPTIMAL_MAX = 30.0
 HUM_OPTIMAL_MIN = 60.0
 HUM_OPTIMAL_MAX = 90.0
 
+# Margen de histeresis por grupo. Evita el "chattering" de alertas cuando
+# un sensor oscila justo en la frontera del umbral. La alerta se DISPARA
+# al cruzar el umbral, pero solo se APAGA cuando el valor entra de vuelta
+# `margen` adentro del rango optimo. Ej. TEMP: salta a abnormal a >30C,
+# pero solo vuelve a ok cuando baja de 29.5C (30 - 0.5).
+HYSTERESIS_MARGIN = {"TEMP": 0.5, "HUM": 2.0}
+
 
 def classify(value: float | None, group: str) -> str:
-    """Devuelve 'ok' | 'abnormal' | 'unknown' segun el rango operativo."""
+    """Devuelve 'ok' | 'abnormal' | 'unknown' segun el rango operativo.
+    Clasificacion stateless (sin histeresis) — la usa el dashboard."""
     if value is None or not isinstance(value, (int, float)):
         return "unknown"
     if group == "TEMP":
         lo, hi = TEMP_OPTIMAL_MIN, TEMP_OPTIMAL_MAX
     else:  # HUM (cualquier otro grupo cae aqui por simetria)
         lo, hi = HUM_OPTIMAL_MIN, HUM_OPTIMAL_MAX
+    return "ok" if lo <= value <= hi else "abnormal"
+
+
+def classify_hysteresis(value: float | None, group: str, prev_state: str | None) -> str:
+    """Clasificacion CON histeresis para las alertas.
+
+    - Si el estado previo era 'ok': se vuelve 'abnormal' al salir del rango.
+    - Si el estado previo era 'abnormal': solo vuelve a 'ok' cuando entra
+      `margen` adentro del rango (zona muerta).
+    Esto evita alertas que se prenden/apagan cuando el valor oscila en
+    la frontera del umbral.
+    """
+    if value is None or not isinstance(value, (int, float)):
+        return "unknown"
+    if group == "TEMP":
+        lo, hi = TEMP_OPTIMAL_MIN, TEMP_OPTIMAL_MAX
+    else:
+        lo, hi = HUM_OPTIMAL_MIN, HUM_OPTIMAL_MAX
+    margin = HYSTERESIS_MARGIN.get(group, 0.0)
+
+    if prev_state == "abnormal":
+        # Para salir de la alerta, exigir entrar con margen
+        return "ok" if (lo + margin) <= value <= (hi - margin) else "abnormal"
+    # Estado previo ok o desconocido: umbral normal
     return "ok" if lo <= value <= hi else "abnormal"
 
 
@@ -203,13 +235,18 @@ class TelegramNotifier:
                 # Saltamos por completo (ni alert log ni Telegram).
                 if var in EXTERIOR_VARS:
                     continue
-                cur_state = alerts[var]["current"]
-                pred_state = alerts[var]["predicted"]
                 cur_val = current_values.get(var)
                 pred_val = predicted_values.get(var)
 
                 prev_cur = self._prev_cur.get(var)
                 prev_pred = self._prev_pred.get(var)
+
+                # Histeresis: recalculamos el estado efectivo usando el valor
+                # crudo + el estado previo. Asi una alerta no se prende/apaga
+                # cuando el valor oscila justo en la frontera del umbral.
+                cur_state = classify_hysteresis(cur_val, group, prev_cur)
+                pred_state = classify_hysteresis(pred_val, group, prev_pred)
+
                 self._prev_cur[var] = cur_state
                 self._prev_pred[var] = pred_state
 
@@ -611,10 +648,15 @@ class UbidotsHTTP:
         self.base = base.rstrip("/")
         self.log = logging.getLogger("ubidots.http")
 
-    def _get(self, path: str) -> dict:
-        url = f"{self.base}{path}"
+    def _get(self, path_or_url: str) -> dict:
+        # Acepta tanto un path relativo ("/api/...") como una URL absoluta
+        # (el campo `next` de la paginacion de Ubidots viene absoluto).
+        if path_or_url.startswith("http://") or path_or_url.startswith("https://"):
+            url = path_or_url
+        else:
+            url = f"{self.base}{path_or_url}"
         req = urllib.request.Request(url, headers={"X-Auth-Token": self.token})
-        with urllib.request.urlopen(req, timeout=15) as r:
+        with urllib.request.urlopen(req, timeout=20) as r:
             return json.loads(r.read())
 
     def get_device_id(self, label: str) -> Optional[str]:
@@ -649,59 +691,77 @@ class UbidotsHTTP:
         return rows
 
     def get_values_range(
-        self, variable_id: str, start_ms: int, end_ms: int, max_points: int = 5000
+        self, variable_id: str, start_ms: int, end_ms: int, max_points: int = 20000
     ) -> list[tuple[int, float]]:
         """Devuelve (timestamp_ms, value) en el rango [start_ms, end_ms].
-        Pagina la respuesta de Ubidots; corta en max_points para no inflar
-        la memoria si el usuario pide rangos huge."""
+
+        PAGINA DE VERDAD: Ubidots limita cada pagina a 1000 registros y
+        devuelve un campo `next` con la URL de la pagina siguiente. Antes
+        este metodo solo traia la 1ra pagina (bug: una semana a 1 muestra/min
+        son ~10000 puntos, se perdian 9000). Ahora seguimos `next` hasta
+        cubrir el rango completo o llegar a max_points.
+        """
         rows: list[tuple[int, float]] = []
-        # Ubidots permite end y start en /values/?start=&end=&page_size=
-        page_size = min(max_points, 1000)
+        page_size = 1000  # maximo que Ubidots permite por pagina
+        next_url: Optional[str] = (
+            f"/api/v1.6/variables/{variable_id}/values/"
+            f"?start={start_ms}&end={end_ms}&page_size={page_size}"
+        )
+        pages = 0
+        max_pages = 60  # techo defensivo: 60 * 1000 = 60k puntos
         try:
-            url = (
-                f"/api/v1.6/variables/{variable_id}/values/"
-                f"?start={start_ms}&end={end_ms}&page_size={page_size}"
-            )
-            data = self._get(url)
-            for r in data.get("results", []):
-                rows.append((int(r["timestamp"]), float(r["value"])))
-                if len(rows) >= max_points:
-                    break
+            while next_url and len(rows) < max_points and pages < max_pages:
+                data = self._get(next_url)
+                pages += 1
+                for r in data.get("results", []):
+                    rows.append((int(r["timestamp"]), float(r["value"])))
+                next_url = data.get("next")  # URL absoluta o None
         except urllib.error.HTTPError as e:
-            self.log.error("Error fetching range var=%s: %s", variable_id, e)
-            return []
-        rows.reverse()  # Ubidots devuelve descendente; queremos ascendente
+            self.log.error("Error fetching range var=%s (pag %d): %s",
+                            variable_id, pages, e)
+            # Devolvemos lo que alcanzamos a juntar en lugar de perder todo
+        except Exception as e:
+            self.log.error("Error inesperado range var=%s: %s", variable_id, e)
+        if pages > 1:
+            self.log.info("var=%s: %d puntos en %d paginas", variable_id, len(rows), pages)
+        rows.sort(key=lambda x: x[0])  # ascendente por timestamp
+        if len(rows) > max_points:
+            rows = rows[:max_points]
         return rows
 
     def get_values_range_by_label(
         self, device_label: str, var_label: str, start_ms: int, end_ms: int,
-        max_points: int = 5000,
+        max_points: int = 20000,
     ) -> list[dict]:
         """Igual que get_values_range pero usando device label + var label
         (no requiere var_id). Devuelve la lista cruda de Ubidots para ser
         consumida por Express (que ya espera ese formato).
 
+        PAGINA siguiendo el campo `next` — igual fix que get_values_range.
         Cada item tiene al menos {timestamp, value}. Ascendente por ts.
         """
-        page_size = min(max_points, 1000)
+        results: list[dict] = []
+        next_url: Optional[str] = (
+            f"/api/v1.6/devices/{device_label}/{var_label}/values/"
+            f"?start={start_ms}&end={end_ms}&page_size=1000"
+        )
+        pages = 0
+        max_pages = 60
         try:
-            url = (
-                f"/api/v1.6/devices/{device_label}/{var_label}/values/"
-                f"?start={start_ms}&end={end_ms}&page_size={page_size}"
-            )
-            data = self._get(url)
-            results = data.get("results", []) or []
-            # Ubidots devuelve descendente; ordenamos ascendente por ts.
-            results.sort(key=lambda r: r.get("timestamp") or 0)
-            if len(results) > max_points:
-                results = results[:max_points]
-            return results
+            while next_url and len(results) < max_points and pages < max_pages:
+                data = self._get(next_url)
+                pages += 1
+                results.extend(data.get("results", []) or [])
+                next_url = data.get("next")
         except urllib.error.HTTPError as e:
-            self.log.error("Error fetching range device=%s var=%s: %s", device_label, var_label, e)
-            return []
+            self.log.error("Error range device=%s var=%s (pag %d): %s",
+                            device_label, var_label, pages, e)
         except Exception as e:
             self.log.error("Error inesperado var=%s: %s", var_label, e)
-            return []
+        results.sort(key=lambda r: r.get("timestamp") or 0)
+        if len(results) > max_points:
+            results = results[:max_points]
+        return results
 
 
 # ---------- Buffer ----------

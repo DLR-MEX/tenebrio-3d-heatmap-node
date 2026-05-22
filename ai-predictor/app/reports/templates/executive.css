@@ -71,11 +71,8 @@ code {
     gap: 16px;
     margin-bottom: 80px;
 }
-.brand-mark {
-    font-size: 48pt;
-}
 .brand-text {
-    text-align: left;
+    text-align: center;
 }
 .brand-title {
     font-size: 22pt;
@@ -228,13 +225,12 @@ h3 {
     text-align: center;
     border: 1px solid #3a5a6a;
 }
-.kpi-icon { font-size: 16pt; }
 .kpi-val {
     font-size: 19pt;
     font-weight: 900;
     color: #E8B830;
     line-height: 1.1;
-    margin: 2px 0;
+    margin: 0 0 4px;
 }
 .kpi-label {
     font-size: 7.5pt;
@@ -256,22 +252,6 @@ h3 {
     border: 1px solid #cbd5e1;
     border-radius: 6px;
     background: white;
-}
-.donut-row {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    margin: 14px 0;
-}
-.chart-donut {
-    width: 38%;
-    height: auto;
-    flex-shrink: 0;
-}
-.donut-text {
-    flex: 1;
-    font-size: 9.5pt;
-    color: #344955;
 }
 
 /* ----------------- TABLAS ----------------- */

@@ -63,23 +63,25 @@ def compute_aggregations(time_series_group: list, group: str,
         for mk, vals in by_minute.items()
     )
 
+    daily = _by_day(avg_series, lo, hi)
     return {
-        "daily": _by_day(avg_series),
+        "daily": daily,
         "hourly_profile": _by_hour_of_day(avg_series),
         "weekly": _by_week(avg_series, lo, hi),
         "heatmap": _heatmap(avg_series),
         "peaks": _peaks(avg_series),
+        "overall": _overall(avg_series, daily),
         "samples": len(avg_series),
     }
 
 
 def _empty() -> dict:
     return {"daily": [], "hourly_profile": [], "weekly": [],
-            "heatmap": None, "peaks": {}, "samples": 0}
+            "heatmap": None, "peaks": {}, "overall": {}, "samples": 0}
 
 
-def _by_day(series: list) -> list[dict]:
-    """Promedio/min/max por día calendario."""
+def _by_day(series: list, lo: float, hi: float) -> list[dict]:
+    """Promedio/min/max y % tiempo en rango por día calendario."""
     buckets: dict[str, list[float]] = {}
     for ts, val in series:
         day_key = time.strftime("%Y-%m-%d", time.localtime(ts))
@@ -87,17 +89,49 @@ def _by_day(series: list) -> list[dict]:
     out = []
     for day in sorted(buckets):
         vals = buckets[day]
+        n = len(vals)
+        in_range = sum(1 for v in vals if lo <= v <= hi)
         # Etiqueta legible: "Lun 19 may"
         dt = datetime.strptime(day, "%Y-%m-%d")
         label = f"{_DOW_ES[dt.weekday()]} {dt.day} {_MONTH_ES[dt.month]}"
         out.append({
             "date": day,
             "label": label,
-            "avg": round(sum(vals) / len(vals), 2),
+            "avg": round(sum(vals) / n, 2),
             "min": round(min(vals), 2),
             "max": round(max(vals), 2),
-            "n": len(vals),
+            "in_range_pct": round(in_range / n * 100, 1),
+            "n": n,
         })
+    return out
+
+
+def _median(vals: list[float]) -> float:
+    s = sorted(vals)
+    n = len(s)
+    if n == 0:
+        return 0.0
+    mid = n // 2
+    return s[mid] if n % 2 else (s[mid - 1] + s[mid]) / 2
+
+
+def _overall(series: list, daily: list) -> dict:
+    """Estadisticas globales del periodo: promedio, mediana, dia mas
+    caliente y mas frio (por promedio diario)."""
+    if not series:
+        return {}
+    vals = [v for _, v in series]
+    out = {
+        "avg": round(sum(vals) / len(vals), 2),
+        "median": round(_median(vals), 2),
+        "min": round(min(vals), 2),
+        "max": round(max(vals), 2),
+    }
+    if daily:
+        hottest = max(daily, key=lambda d: d["avg"])
+        coldest = min(daily, key=lambda d: d["avg"])
+        out["hottest_day"] = {"label": hottest["label"], "avg": hottest["avg"]}
+        out["coldest_day"] = {"label": coldest["label"], "avg": coldest["avg"]}
     return out
 
 
