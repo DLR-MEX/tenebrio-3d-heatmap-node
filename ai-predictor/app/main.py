@@ -597,6 +597,11 @@ async def post_agent_chat(request: Request):
     # Construir mensajes para el agente: history + nueva pregunta
     messages = clean_history + [{"role": "user", "content": message}]
 
+    # Log de la pregunta — queda registro de que se le pregunta al agente
+    # (util para auditar calidad de respuestas). Truncado para no inflar.
+    qa_log = logging.getLogger("agent.qa")
+    qa_log.info("PREGUNTA: %s", message[:300])
+
     # chat() es bloqueante (HTTP a Ollama), corremos en thread para no bloquear
     # el event loop de FastAPI
     try:
@@ -607,4 +612,8 @@ async def post_agent_chat(request: Request):
             {"error": f"Agente fallo: {e}"},
             status_code=502,
         )
+    # Log de la respuesta: tools usadas + primeros 400 chars del reply
+    tools_used = [t.get("name") for t in (result.get("tool_calls") or [])]
+    reply_txt = (result.get("reply") or "")[:400]
+    qa_log.info("RESPUESTA (tools=%s): %s", tools_used, reply_txt)
     return result

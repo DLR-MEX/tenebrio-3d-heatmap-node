@@ -121,68 +121,77 @@ def collect_period_data(
     }
 
     # --- Histórico Ubidots: stats por sensor ---
+    # PARALELIZADO: las llamadas HTTP a Ubidots eran el cuello de botella
+    # (~50 requests secuenciales = 150s+). Con un ThreadPoolExecutor las
+    # hacemos concurrentes. urllib libera el GIL en I/O asi que threads
+    # sirven perfecto aqui.
+    from concurrent.futures import ThreadPoolExecutor
+
     http = UbidotsHTTP(service.cfg.token)
     start_ms = int(start_ts * 1000)
     end_ms = int(end_ts * 1000)
 
     out["history"] = {"TEMP": {}, "HUM": {}}
     out["time_series"] = {"TEMP": [], "HUM": []}
+    # predictions_accuracy: el template ya no muestra precision del modelo
+    # (se quito en el rework). Lo dejamos vacio para no romper render.py.
+    out["predictions_accuracy"] = {"TEMP": {}, "HUM": {}}
 
     all_temp_vars = TEMP_VARS + EXTRA_TEMP_VARS  # incluye tps, tpi
-    for var in all_temp_vars:
+
+    # Pre-cargar el var_id cache una sola vez (evita que cada thread lo
+    # resuelva por separado).
+    device_id = None
+    var_map: dict = {}
+    try:
+        device_id = http.get_device_id(service.cfg.device_label)
+        if device_id:
+            var_map = http.get_variables(device_id)
+            _var_id_cache.update(var_map)
+    except Exception as e:
+        log.warning("No se pudo cargar variable map: %s", e)
+
+    def _pull_temp(var):
         stats, ts_data = _pull_var_stats(
             service, http, var, start_ms, end_ms,
             TEMP_OPTIMAL_MIN, TEMP_OPTIMAL_MAX,
             include_time_series and var not in ("tps", "tpi"),
             max_history_points,
         )
-        if stats:
-            out["history"]["TEMP"][var] = stats
-        if ts_data:
-            out["time_series"]["TEMP"].append({"var": var, "data": ts_data})
+        return ("TEMP", var, stats, ts_data)
 
-    for var in HUM_VARS:
+    def _pull_hum(var):
         stats, ts_data = _pull_var_stats(
             service, http, var, start_ms, end_ms,
             HUM_OPTIMAL_MIN, HUM_OPTIMAL_MAX,
-            include_time_series,
-            max_history_points,
+            include_time_series, max_history_points,
         )
-        if stats:
-            out["history"]["HUM"][var] = stats
-        if ts_data:
-            out["time_series"]["HUM"].append({"var": var, "data": ts_data})
+        return ("HUM", var, stats, ts_data)
 
-    # --- Precisión del modelo predictivo (real vs _pred) ---
-    out["predictions_accuracy"] = {"TEMP": {}, "HUM": {}}
-    for var in TEMP_VARS:
-        accuracy = _compute_prediction_accuracy(service, http, var, start_ms, end_ms)
-        if accuracy:
-            out["predictions_accuracy"]["TEMP"][var] = accuracy
-    for var in HUM_VARS:
-        accuracy = _compute_prediction_accuracy(service, http, var, start_ms, end_ms)
-        if accuracy:
-            out["predictions_accuracy"]["HUM"][var] = accuracy
+    jobs = [(_pull_temp, v) for v in all_temp_vars] + [(_pull_hum, v) for v in HUM_VARS]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for group, var, stats, ts_data in pool.map(lambda j: j[0](j[1]), jobs):
+            if stats:
+                out["history"][group][var] = stats
+            if ts_data:
+                out["time_series"][group].append({"var": var, "data": ts_data})
+    # Ordenar time_series por nombre de var para consistencia visual
+    for g in ("TEMP", "HUM"):
+        out["time_series"][g].sort(key=lambda s: s["var"])
 
-    # --- Infraestructura: snapshot actual (no historico aqui, seria pesado) ---
+    # --- Infraestructura: ultima lectura de cada componente (paralelo) ---
     out["infrastructure"] = {}
-    # Reutilizamos resolucion de var_ids: necesitamos device id + variables
-    try:
-        device_id = http.get_device_id(service.cfg.device_label)
-        var_map = http.get_variables(device_id) if device_id else {}
-    except Exception as e:
-        log.warning("No se pudo cargar variable map: %s", e)
-        var_map = {}
 
-    for label, (display, unit, category, hint) in INFRASTRUCTURE_VARS.items():
+    def _pull_infra(item):
+        label, (display, unit, category, hint) = item
         var_id = var_map.get(label)
         if not var_id:
-            continue
+            return None
         try:
             rows = http.get_last_values(var_id, 1)
             if rows:
                 ts_ms, val = rows[-1]
-                out["infrastructure"][label] = {
+                return label, {
                     "label": display,
                     "category": category,
                     "value": round(val, 2),
@@ -192,6 +201,12 @@ def collect_period_data(
                 }
         except Exception as e:
             log.warning("Error infra var=%s: %s", label, e)
+        return None
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for result in pool.map(_pull_infra, list(INFRASTRUCTURE_VARS.items())):
+            if result:
+                out["infrastructure"][result[0]] = result[1]
 
     # --- Agregaciones temporales (por dia, hora, semana) ---
     # Estas alimentan los charts variados del reporte: heatmap hora x dia,

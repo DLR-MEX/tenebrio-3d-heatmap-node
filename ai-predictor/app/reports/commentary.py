@@ -50,40 +50,42 @@ negocio, supervisores, operadores. Tu rol:
 
 
 def generate_commentary(agent, data: dict) -> dict:
-    """Genera las 4 secciones llamando al LLM via AgentService.
+    """Genera las secciones llamando al LLM via AgentService.
+
+    PARALELIZADO: las secciones eran 4-5 llamadas LLM secuenciales
+    (~8s c/u = 35s). Como cada una es independiente las lanzamos
+    concurrentes con un ThreadPoolExecutor. El httpx.Client del agente
+    es thread-safe y commentary usa disable_tools=True (no toca estado
+    compartido). Baja de ~35s a ~10s.
 
     `agent` es el AgentService ya configurado (acceso a Ollama Cloud).
     `data` es el dict del collector.
 
-    Returns: {'summary', 'events', 'infrastructure', 'recommendations'}
-             — cada uno un string HTML listo para inyectar.
+    Returns: {'summary', 'events', 'weekly'?, 'infrastructure'?, 'recommendations'}
     """
-    sections = {}
+    from concurrent.futures import ThreadPoolExecutor
 
-    sections["summary"] = _safe_section(
-        agent, data, "summary", _prompt_summary,
-        fallback=_fallback_summary(data),
-    )
-    sections["events"] = _safe_section(
-        agent, data, "events", _prompt_events,
-        fallback=_fallback_events(data),
-    )
-    # Seccion semanal: solo si el periodo cubre 2+ semanas
+    # (nombre, prompt_fn, fallback)
+    tasks = [
+        ("summary", _prompt_summary, _fallback_summary(data)),
+        ("events", _prompt_events, _fallback_events(data)),
+        ("recommendations", _prompt_recommendations, _fallback_recommendations(data)),
+    ]
     weekly_temp = (data.get("aggregations", {}).get("TEMP", {}) or {}).get("weekly") or []
     if len(weekly_temp) >= 2:
-        sections["weekly"] = _safe_section(
-            agent, data, "weekly", _prompt_weekly,
-            fallback=_fallback_weekly(data),
-        )
+        tasks.append(("weekly", _prompt_weekly, _fallback_weekly(data)))
     if data.get("infrastructure"):
-        sections["infrastructure"] = _safe_section(
-            agent, data, "infrastructure", _prompt_infrastructure,
-            fallback=_fallback_infrastructure(data),
-        )
-    sections["recommendations"] = _safe_section(
-        agent, data, "recommendations", _prompt_recommendations,
-        fallback=_fallback_recommendations(data),
-    )
+        tasks.append(("infrastructure", _prompt_infrastructure, _fallback_infrastructure(data)))
+
+    sections: dict = {}
+
+    def _run(task):
+        name, prompt_fn, fallback = task
+        return name, _safe_section(agent, data, name, prompt_fn, fallback)
+
+    with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
+        for name, html in pool.map(_run, tasks):
+            sections[name] = html
     return sections
 
 

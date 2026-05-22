@@ -360,11 +360,11 @@ export function createApp() {
   // proxyJson; lo elevamos para chat porque las queries con tool calls pueden
   // tardar 5-15s (multiples roundtrips al LLM y a Ubidots).
   const agentJsonParser = express.json({ limit: '32kb' });
-  // 90s: queries que necesitan multiple tool calls + Ubidots histórico
-  // pueden ser lentas (5-30s + roundtrips LLM). El cliente del widget usa
-  // un AbortController propio mas estricto para no dejar al usuario esperando
-  // demasiado en el browser.
-  const AGENT_CHAT_TIMEOUT_MS = 90000;
+  // 200s: la mayoria de queries responden en 5-30s, pero generar un
+  // reporte PDF (tool generate_report) recolecta histórico de Ubidots +
+  // 4 llamadas LLM + render Playwright. Aun paralelizado puede tomar
+  // 60-120s. El widget muestra progreso rotativo durante la espera.
+  const AGENT_CHAT_TIMEOUT_MS = 200000;
   app.post('/api/predictor/agent/chat', agentJsonParser, async (req, res) => {
     const upstreamUrl = `${AI_PREDICTOR_BASE}/api/agent/chat`;
     const controller = new AbortController();

@@ -6,7 +6,7 @@
 const ENDPOINT = '/api/predictor/agent/chat';
 const STORAGE_KEY = 'ai-chat-history-v1';
 const MAX_HISTORY = 30;
-const REQUEST_TIMEOUT_MS = 95000;
+const REQUEST_TIMEOUT_MS = 205000;
 
 // Sugerencias para la primera interaccion. Cada chip dispara la pregunta
 // como si el usuario la hubiera tipeado y enviado.
