@@ -52,17 +52,21 @@ HISTORY_MAX = 240  # ~ ultimas 240 predicciones por grupo en memoria
 # valor se clasifica como "abnormal". El modelo GRU emite floats puros;
 # la clasificacion vive aqui para que cualquier consumidor (dashboard,
 # LangGraph, MQTT republish) reciba la misma senal.
-TEMP_OPTIMAL_MIN = 15.0
+TEMP_OPTIMAL_MIN = 20.0
 TEMP_OPTIMAL_MAX = 30.0
 HUM_OPTIMAL_MIN = 60.0
 HUM_OPTIMAL_MAX = 90.0
 
-# Margen de histeresis por grupo. Evita el "chattering" de alertas cuando
-# un sensor oscila justo en la frontera del umbral. La alerta se DISPARA
-# al cruzar el umbral, pero solo se APAGA cuando el valor entra de vuelta
-# `margen` adentro del rango optimo. Ej. TEMP: salta a abnormal a >30C,
-# pero solo vuelve a ok cuando baja de 29.5C (30 - 0.5).
-HYSTERESIS_MARGIN = {"TEMP": 0.5, "HUM": 2.0}
+# Margen de histeresis por grupo. Evita el "chattering" de alertas y reduce
+# el ruido en condiciones marginales. La alerta NO dispara al borde del rango
+# optimo: solo dispara al cruzar `margen` AFUERA del rango. Una vez en alerta,
+# vuelve a ok al entrar nuevamente al rango optimo (sin margen adicional).
+# Ej. TEMP rango 20-30, margen 2.0:
+#   - Alerta dispara a <18C o >32C
+#   - Alerta se apaga al volver a 20-30C
+#   - Zona muerta 18-20 y 30-32: si era ok sigue ok; si era abnormal sigue abnormal.
+# Filosofia: 19C no es ideal pero tampoco emergencia; <18C si vale Telegram.
+HYSTERESIS_MARGIN = {"TEMP": 2.0, "HUM": 2.0}
 
 
 def classify(value: float | None, group: str) -> str:
@@ -80,11 +84,13 @@ def classify(value: float | None, group: str) -> str:
 def classify_hysteresis(value: float | None, group: str, prev_state: str | None) -> str:
     """Clasificacion CON histeresis para las alertas.
 
-    - Si el estado previo era 'ok': se vuelve 'abnormal' al salir del rango.
-    - Si el estado previo era 'abnormal': solo vuelve a 'ok' cuando entra
-      `margen` adentro del rango (zona muerta).
-    Esto evita alertas que se prenden/apagan cuando el valor oscila en
-    la frontera del umbral.
+    Modelo "alerta dispara fuera del rango":
+    - Si el estado previo era 'ok' (o desconocido): solo se vuelve 'abnormal'
+      al cruzar `margen` AFUERA del rango optimo.
+    - Si el estado previo era 'abnormal': vuelve a 'ok' al entrar de nuevo
+      al rango optimo (sin margen adicional).
+    Esto reduce ruido en condiciones marginales (19C no spamea Telegram)
+    sin perder la senial cuando algo de verdad esta fuera de rango.
     """
     if value is None or not isinstance(value, (int, float)):
         return "unknown"
@@ -95,10 +101,10 @@ def classify_hysteresis(value: float | None, group: str, prev_state: str | None)
     margin = HYSTERESIS_MARGIN.get(group, 0.0)
 
     if prev_state == "abnormal":
-        # Para salir de la alerta, exigir entrar con margen
-        return "ok" if (lo + margin) <= value <= (hi - margin) else "abnormal"
-    # Estado previo ok o desconocido: umbral normal
-    return "ok" if lo <= value <= hi else "abnormal"
+        # Para apagar la alerta, basta con volver al rango optimo (sin margen)
+        return "ok" if lo <= value <= hi else "abnormal"
+    # Estado previo ok o desconocido: dispara solo al cruzar `margen` afuera
+    return "abnormal" if (value < lo - margin) or (value > hi + margin) else "ok"
 
 
 def build_alerts(current: dict, predicted: dict, var_names: list[str], group: str) -> dict:

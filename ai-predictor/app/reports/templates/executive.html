@@ -136,24 +136,34 @@
     Las gráficas muestran la temperatura interior (promedio de los 5 sensores del cuarto).</p>
 
     {% if charts.temp_heatmap %}
-        <h2>¿A qué horas hace más calor?</h2>
+        <h2>¿A qué horas hace más calor? (interior)</h2>
         <p class="chart-caption">Cada celda es el promedio de esa hora en ese día.
         Colores cálidos = más caliente.</p>
-        <img class="chart" src="{{ charts.temp_heatmap }}" alt="Heatmap temperatura">
+        <img class="chart" src="{{ charts.temp_heatmap }}" alt="Heatmap temperatura interior">
+    {% endif %}
+
+    {% if charts.temp_ext_heatmap %}
+        <h2>Temperatura exterior por hora y día</h2>
+        <p class="chart-caption">Mismo heatmap pero del sensor de afuera (tex).
+        Sirve para comparar visualmente patrones interior/exterior y detectar
+        si las horas calientes del cuarto coinciden con las del clima.</p>
+        <img class="chart" src="{{ charts.temp_ext_heatmap }}" alt="Heatmap temperatura exterior">
     {% endif %}
 
     {% if charts.temp_hourly %}
-        <h2>El día típico</h2>
+        <h2>El día típico — interior vs exterior</h2>
         <p class="chart-caption">Promedio de cada hora juntando todos los días.
-        El punto rojo marca la hora más caliente.</p>
+        La línea de color es el interior; la gris punteada es el exterior
+        (clima de la calle). El punto rojo marca la hora más caliente del interior.</p>
         <img class="chart" src="{{ charts.temp_hourly }}" alt="Perfil horario temperatura">
     {% endif %}
 
     {% if charts.temp_daily %}
         <h2>Promedio por día frente al rango ideal</h2>
-        <p class="chart-caption">Barra = promedio del día. La franja verde es el rango
-        ideal — se busca que las barras caigan dentro de ella. Las líneas verticales
-        muestran el mínimo y máximo de cada día.</p>
+        <p class="chart-caption">Barra = promedio interior del día. La franja verde
+        es el rango ideal — se busca que las barras caigan dentro de ella.
+        La línea gris punteada superpuesta es el promedio exterior — ayuda a ver
+        si el cuarto se mantuvo estable a pesar del clima de afuera.</p>
         <img class="chart" src="{{ charts.temp_daily }}" alt="Promedio diario temperatura">
     {% endif %}
 
@@ -174,21 +184,32 @@
     Las gráficas muestran la humedad interior (promedio de los 5 sensores del cuarto).</p>
 
     {% if charts.hum_heatmap %}
-        <h2>¿A qué horas cambia la humedad?</h2>
+        <h2>¿A qué horas cambia la humedad? (interior)</h2>
         <p class="chart-caption">Cada celda es el promedio de esa hora en ese día.</p>
-        <img class="chart" src="{{ charts.hum_heatmap }}" alt="Heatmap humedad">
+        <img class="chart" src="{{ charts.hum_heatmap }}" alt="Heatmap humedad interior">
+    {% endif %}
+
+    {% if charts.hum_ext_heatmap %}
+        <h2>Humedad exterior por hora y día</h2>
+        <p class="chart-caption">Mismo heatmap pero del sensor de afuera (hex).
+        Útil para ver si la humedad del cuarto sigue al clima de afuera o
+        si la ventilación / atomización mantienen el cuarto desacoplado.</p>
+        <img class="chart" src="{{ charts.hum_ext_heatmap }}" alt="Heatmap humedad exterior">
     {% endif %}
 
     {% if charts.hum_hourly %}
-        <h2>El día típico</h2>
-        <p class="chart-caption">Promedio de cada hora juntando todos los días.</p>
+        <h2>El día típico — interior vs exterior</h2>
+        <p class="chart-caption">Promedio de cada hora juntando todos los días.
+        La línea de color es el interior; la gris punteada es la humedad
+        del exterior.</p>
         <img class="chart" src="{{ charts.hum_hourly }}" alt="Perfil horario humedad">
     {% endif %}
 
     {% if charts.hum_daily %}
         <h2>Promedio por día frente al rango ideal</h2>
-        <p class="chart-caption">Barra = promedio del día. La franja verde es el
-        rango ideal.</p>
+        <p class="chart-caption">Barra = promedio interior del día. La franja verde
+        es el rango ideal. La línea gris punteada superpuesta es el promedio
+        exterior — útil para ver si la humedad del cuarto sigue al clima de afuera.</p>
         <img class="chart" src="{{ charts.hum_daily }}" alt="Promedio diario humedad">
     {% endif %}
 
@@ -199,6 +220,96 @@
         <img class="chart" src="{{ charts.hum_in_range }}" alt="Tiempo en rango humedad">
     {% endif %}
 </section>
+
+<!-- ============================================================
+     CALIDAD DEL AIRE — AMONIACO (NH3)
+     ============================================================ -->
+{% set nh3 = (air_quality or {}).nh3 %}
+{% if nh3 %}
+<section class="page">
+    <h1>Calidad del aire — Amoniaco (NH<sub>3</sub>)</h1>
+    <p class="section-intro">El amoniaco proviene de los desechos de la cría
+    y debe mantenerse por debajo de <strong>{{ nh3.threshold }} ppm</strong>
+    para no afectar la salud de los tenebrios. Niveles altos sostenidos indican
+    ventilación insuficiente o sustrato saturado.</p>
+
+    <div class="kpi-grid">
+        <div class="kpi">
+            <div class="kpi-val">{{ nh3.max }}</div>
+            <div class="kpi-label">Pico máximo del periodo</div>
+            <div class="kpi-sub">ppm</div>
+        </div>
+        <div class="kpi">
+            <div class="kpi-val">{{ nh3.avg }}</div>
+            <div class="kpi-label">Promedio del periodo</div>
+            <div class="kpi-sub">ppm</div>
+        </div>
+        <div class="kpi">
+            <div class="kpi-val">{{ nh3.time_over_pct }}%</div>
+            <div class="kpi-label">Tiempo sobre umbral</div>
+            <div class="kpi-sub">{{ nh3.threshold }} ppm</div>
+        </div>
+    </div>
+
+    {% if charts.nh3_timeline %}
+        <h2>Evolución en el tiempo</h2>
+        <p class="chart-caption">La banda roja indica niveles por encima
+        del umbral sanitario. El punto rojo marca el pico del periodo.</p>
+        <img class="chart" src="{{ charts.nh3_timeline }}" alt="NH3 evolución">
+    {% endif %}
+
+    {% if charts.nh3_daily %}
+        <h2>Promedio diario</h2>
+        <p class="chart-caption">Cada barra es el promedio del día. Cuando el
+        pico del día superó el umbral, la barra aparece en rojo.</p>
+        <img class="chart" src="{{ charts.nh3_daily }}" alt="NH3 promedio diario">
+    {% endif %}
+</section>
+{% endif %}
+
+<!-- ============================================================
+     SISTEMA DE CALEFACCIÓN — termo / calentador / piso radiante
+     ============================================================ -->
+{% if charts.infra_termo or charts.infra_calentador or charts.infra_entrada or charts.infra_salida %}
+<section class="page">
+    <h1>Sistema de calefacción</h1>
+    <p class="section-intro">Flujo del agua caliente:
+    <strong>Calentador solar</strong> &rarr; <strong>Termo</strong> &rarr;
+    <strong>Entrada al piso radiante</strong> &rarr;
+    <strong>Salida del piso</strong>. Cada heatmap muestra la temperatura
+    promedio de ese componente por hora y día — sirven para detectar a qué
+    horas el sistema enfría, si el termo mantiene temperatura toda la noche,
+    o si la salida está demasiado fría (poco intercambio en el piso).</p>
+
+    {% if charts.infra_calentador %}
+        <h2>Calentador solar</h2>
+        <p class="chart-caption">Panel solar que calienta el agua antes
+        del termo. De noche/sin sol cae naturalmente.</p>
+        <img class="chart" src="{{ charts.infra_calentador }}" alt="Heatmap calentador solar">
+    {% endif %}
+
+    {% if charts.infra_termo %}
+        <h2>Termo</h2>
+        <p class="chart-caption">Tanque acumulador. Debería sostener
+        temperatura aunque el calentador no esté aportando.</p>
+        <img class="chart" src="{{ charts.infra_termo }}" alt="Heatmap termo">
+    {% endif %}
+
+    {% if charts.infra_entrada %}
+        <h2>Entrada al piso radiante</h2>
+        <p class="chart-caption">Tubería entrando al circuito del piso —
+        debería estar cerca de la temperatura del termo.</p>
+        <img class="chart" src="{{ charts.infra_entrada }}" alt="Heatmap entrada piso">
+    {% endif %}
+
+    {% if charts.infra_salida %}
+        <h2>Salida del piso radiante</h2>
+        <p class="chart-caption">Tubería de retorno. La diferencia con la
+        entrada (delta) indica cuánto calor entregó al cuarto.</p>
+        <img class="chart" src="{{ charts.infra_salida }}" alt="Heatmap salida piso">
+    {% endif %}
+</section>
+{% endif %}
 
 <!-- ============================================================
      COMPARATIVA SEMANAL (solo si el periodo cubre 2+ semanas)

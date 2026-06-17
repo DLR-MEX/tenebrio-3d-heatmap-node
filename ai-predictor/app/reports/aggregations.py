@@ -23,11 +23,14 @@ from datetime import datetime
 
 log = logging.getLogger("reports.aggregations")
 
-# Sensores interiores por grupo (los exteriores tex/hex no entran)
+# Sensores interiores por grupo (los exteriores tex/hex no entran al promedio interior)
 _INTERIOR = {
     "TEMP": ("t1", "t2", "t3", "t4", "t5"),
     "HUM": ("h1", "h2", "h3", "h4", "h5"),
 }
+# Sensor exterior por grupo (intemperie). Se calcula aparte para overlay
+# interior-vs-exterior en las graficas del reporte.
+_EXTERIOR = {"TEMP": "tex", "HUM": "hex"}
 _DOW_ES = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
 _MONTH_ES = ["", "ene", "feb", "mar", "abr", "may", "jun",
              "jul", "ago", "sep", "oct", "nov", "dic"]
@@ -72,6 +75,37 @@ def compute_aggregations(time_series_group: list, group: str,
         "peaks": _peaks(avg_series),
         "overall": _overall(avg_series, daily),
         "samples": len(avg_series),
+    }
+
+
+def compute_exterior_series(time_series_group: list, group: str) -> dict:
+    """Serie del sensor exterior (tex o hex) lista para overlay en charts.
+
+    Devuelve {hourly_profile, daily} con la misma forma que las del interior,
+    para que los charts puedan recibirla y dibujar una linea de referencia.
+    No calcula heatmap ni weekly: el exterior es solo contexto.
+    """
+    ext_var = _EXTERIOR.get(group)
+    if not ext_var:
+        return {"hourly_profile": [], "daily": []}
+    rows = []
+    for s in time_series_group:
+        if s["var"] == ext_var:
+            rows = [(ts_ms // 1000, val) for ts_ms, val in s["data"]]
+            break
+    if not rows:
+        return {"hourly_profile": [], "daily": []}
+    rows.sort()
+    # Para el heatmap reusamos el helper interno _heatmap (que espera
+    # (ts_seg, val), igual que el del interior).
+    return {
+        "hourly_profile": _by_hour_of_day(rows),
+        # daily simplificado: solo promedio (sin rango ideal, no aplica)
+        "daily": [
+            {"date": d["date"], "label": d["label"], "avg": d["avg"]}
+            for d in _by_day(rows, lo=-999, hi=999)
+        ],
+        "heatmap": _heatmap(rows),
     }
 
 

@@ -6,7 +6,7 @@ import 'dotenv/config';
 // Configuracion MQTT / Ubidots
 export const MQTT_BROKER = process.env.MQTT_BROKER || 'industrial.api.ubidots.com';
 export const MQTT_PORT = parseInt(process.env.MQTT_PORT || '1883', 10);
-export const UBIDOTS_TOKEN = process.env.UBIDOTS_TOKEN || 'BBUS-6T17NCkbJ8pBVzOGwAhSnNijg2wBtu';
+export const UBIDOTS_TOKEN = process.env.UBIDOTS_TOKEN || '';
 export const DEVICE_LABEL = process.env.DEVICE_LABEL || 'tenebrios';
 
 // Topico MQTT base del dispositivo

@@ -42,6 +42,17 @@ from typing import Optional
 log = logging.getLogger("reports.collector")
 
 
+def floor_to_local_midnight(ts: float) -> float:
+    """Redondea un epoch hacia abajo al inicio del día local (00:00:00).
+
+    Así los reportes (y el heatmap hora × día) arrancan a las 00:00 y no a
+    media mañana — la primera fila del heatmap queda completa en vez de
+    empezar a la hora en que se pidió el reporte."""
+    lt = time.localtime(ts)
+    return time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday,
+                        0, 0, 0, lt.tm_wday, lt.tm_yday, -1))
+
+
 def collect_period_data(
     service,                          # PredictionService (evita import circular)
     start_ts: float,                  # epoch seconds
@@ -50,6 +61,9 @@ def collect_period_data(
     max_history_points: int = 15000,  # >1 semana a 1 muestra/min
 ) -> dict:
     """Recolecta todos los datos necesarios para un reporte del periodo."""
+    # El periodo arranca al inicio del día local para que el heatmap empiece
+    # a las 00:00 (idempotente si ya viene alineado).
+    start_ts = floor_to_local_midnight(start_ts)
     from app.service import (
         TEMP_VARS, HUM_VARS, EXTRA_TEMP_VARS, EXTERIOR_VARS,
         TEMP_OPTIMAL_MIN, TEMP_OPTIMAL_MAX,
@@ -208,10 +222,67 @@ def collect_period_data(
             if result:
                 out["infrastructure"][result[0]] = result[1]
 
+    # --- Amoniaco (NH3): stats + serie temporal para la seccion calidad de aire ---
+    # Umbral sanitario: <25 ppm. Si la variable no existe en el dispositivo se
+    # omite limpiamente y la seccion del PDF colapsa.
+    NH3_MAX_PPM = 25.0
+    out["air_quality"] = {"nh3": None}
+    nh3_var_id = var_map.get("amoniaco")
+    if nh3_var_id:
+        try:
+            nh3_rows = http.get_values_range(nh3_var_id, start_ms, end_ms,
+                                             max_points=max_history_points)
+            if nh3_rows:
+                nh3_vals = [v for _, v in nh3_rows]
+                n_nh3 = len(nh3_vals)
+                over = sum(1 for v in nh3_vals if v > NH3_MAX_PPM)
+                out["air_quality"]["nh3"] = {
+                    "min": round(min(nh3_vals), 2),
+                    "max": round(max(nh3_vals), 2),
+                    "avg": round(sum(nh3_vals) / n_nh3, 2),
+                    "n": n_nh3,
+                    "threshold": NH3_MAX_PPM,
+                    "time_over_pct": round(over / n_nh3 * 100, 1),
+                    "data": nh3_rows,  # serie cruda para charts
+                }
+        except Exception as e:
+            log.warning("NH3 pull fallo: %s", e)
+
+    # --- Historia de infraestructura para heatmaps (termo, calentador,
+    # entrada y salida del piso radiante). Una clave por sensor con
+    # display_name + serie temporal cruda. Usa el mismo pull paralelo.
+    INFRA_HISTORY_VARS = [
+        ("temperatura5", "Termo"),
+        ("temperatura2", "Calentador solar"),
+        ("temperatura4", "Entrada al piso radiante"),
+        ("temperatura1", "Salida del piso radiante"),
+    ]
+
+    def _pull_infra_history(item):
+        label, display = item
+        vid = var_map.get(label)
+        if not vid:
+            return None
+        try:
+            rows = http.get_values_range(vid, start_ms, end_ms,
+                                         max_points=max_history_points)
+            if not rows:
+                return None
+            return label, {"display": display, "data": rows, "n": len(rows)}
+        except Exception as e:
+            log.warning("infra_history %s fallo: %s", label, e)
+            return None
+
+    out["infrastructure_history"] = {}
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        for result in pool.map(_pull_infra_history, INFRA_HISTORY_VARS):
+            if result:
+                out["infrastructure_history"][result[0]] = result[1]
+
     # --- Agregaciones temporales (por dia, hora, semana) ---
     # Estas alimentan los charts variados del reporte: heatmap hora x dia,
     # promedio diario, perfil horario, comparativa semanal.
-    from app.reports.aggregations import compute_aggregations
+    from app.reports.aggregations import compute_aggregations, compute_exterior_series
     out["aggregations"] = {
         "TEMP": compute_aggregations(
             out["time_series"]["TEMP"], "TEMP",
@@ -221,6 +292,11 @@ def collect_period_data(
             out["time_series"]["HUM"], "HUM",
             HUM_OPTIMAL_MIN, HUM_OPTIMAL_MAX,
         ),
+    }
+    # Serie exterior (tex/hex) para overlay interior-vs-exterior en charts
+    out["exterior"] = {
+        "TEMP": compute_exterior_series(out["time_series"]["TEMP"], "TEMP"),
+        "HUM": compute_exterior_series(out["time_series"]["HUM"], "HUM"),
     }
 
     log.info(
@@ -285,7 +361,10 @@ def _pull_var_stats(
         "time_outside_pct": round((outside / n) * 100, 1),
     }
     ts_data = None
-    if include_ts and var not in ("tex", "hex"):  # exteriores fuera de chart principal
+    if include_ts:
+        # tex/hex se incluyen para que el reporte pueda comparar interior vs exterior.
+        # El collector marca la serie con su `var` y aggregations decide si va al
+        # promedio interior o a la serie exterior.
         # Submuestrear si hay demasiados puntos
         if n > max_points:
             step = max(1, n // max_points)

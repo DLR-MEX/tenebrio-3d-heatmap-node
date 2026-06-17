@@ -112,9 +112,19 @@ de t1-t5; se consultan a Ubidots a demanda):
 Si el usuario diagnostica problemas de temperatura (ej. "por qué está frío
 el cuarto?"), correlaciona con get_infrastructure_state — el termo o
 calentador podrían estar bajos.
+IMPORTANTE — HISTORIAL DE INFRAESTRUCTURA: get_infrastructure_state da SOLO la
+última lectura. Cuando el usuario pida el historial de un componente ("datos de
+todo el día del calentador solar", "el termo de ayer", "la bomba el lunes",
+"cómo estuvo el piso radiante esta semana"), SÍ hay historial: usa
+get_history_ubidots pasando el label de Ubidots del componente
+(calentador solar=temperatura2, termo=temperatura5, entrada=temperatura4,
+medio del piso=temperatura3, salida del piso=temperatura1, bomba=m2,
+válvulas=v1/v2, ventilador, extractor, amoniaco, hum_general) con las `hours`
+correspondientes (ayer≈24, hace una semana≈168; máx 168). NUNCA digas que no
+tienes historial de infraestructura — sí lo tienes por esta vía.
 
 RANGOS ÓPTIMOS (aplican SOLO a sensores INTERIORES):
-- TEMP interior (t1–t5): 15–30 °C. Fuera = "anormal" → requiere atención.
+- TEMP interior (t1–t5): 20–30 °C. Fuera = "anormal" → requiere atención.
 - HUM interior (h1–h5):  60–90 %. Fuera = "anormal" → requiere atención.
 
 TRATAMIENTO DE SENSORES EXTERIORES (tex, hex):
@@ -171,6 +181,12 @@ TU ROL:
   El widget muestra el PDF como tarjeta con preview y descarga.
   En tu respuesta despues de la tool, menciona brevemente (1-2 lineas)
   el periodo cubierto y los conteos clave (alertas, saltos).
+  RANGO DEL REPORTE: para periodos relativos usa SOLO `hours`
+  (ultima semana = hours:168, ultimo mes = hours:720, hoy / ultimas 24h
+  = hours:24, ultimas 48h = hours:48). NO combines `hours` con
+  `start_iso`/`end_iso`, y NUNCA mandes hours:0. Usa `start_iso`/`end_iso`
+  (sin `hours`) solo cuando el usuario de fechas exactas
+  (ej. "del 1 al 15 de mayo").
 - Si no tienes la información, di que no la tienes — no inventes.
 - No tienes capacidad de cambiar nada del sistema; eres solo informativo.
 - Cuando reportes valores, distingue claramente entre interiores y exteriores.
@@ -282,14 +298,27 @@ def _tool_schemas() -> list[dict]:
                     "Pulla el histórico real de un sensor desde Ubidots HTTP API y "
                     "devuelve un resumen estadístico (min, max, avg) más los puntos "
                     "muestreados. Úsalo para preguntas tipo '¿cuál fue la temperatura "
-                    "promedio de t1 las últimas 6 horas?', '¿cuándo bajó la humedad?'."
+                    "promedio de t1 las últimas 6 horas?', '¿cuándo bajó la humedad?'. "
+                    "TAMBIÉN sirve el HISTÓRICO de variables de INFRAESTRUCTURA "
+                    "(calentador solar, termo, bomba, piso radiante, válvulas, "
+                    "ventilador, extractor, amoniaco, hum_general): pasa su label de "
+                    "Ubidots como 'var' (ver lista abajo). Para esas variables NO se "
+                    "aplica el rango óptimo del cuarto (son informativas)."
                 ),
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "var": {
                             "type": "string",
-                            "description": "Sensor: t1..t5, tex, h1..h5, hex.",
+                            "description": (
+                                "Sensor del cuarto: t1..t5, tex, h1..h5, hex. "
+                                "O variable de infraestructura por su label de Ubidots: "
+                                "temperatura2 (calentador solar), temperatura5 (termo), "
+                                "temperatura4 (entrada al cuarto), temperatura3 (medio "
+                                "del piso), temperatura1 (salida del piso), m2 (bomba), "
+                                "v1/v2 (válvulas), ventilador, extractor, amoniaco (NH3), "
+                                "hum_general (humedad agregada)."
+                            ),
                         },
                         "hours": {
                             "type": "number",
@@ -343,7 +372,10 @@ def _tool_schemas() -> list[dict]:
                     "  Otros: hum_general (humedad agregada).\n"
                     "Usalo cuando el usuario pregunte por termo, calentador, bomba, "
                     "piso radiante, valvulas, ventilador, extractor, amoniaco/NH3, "
-                    "o calidad de aire."
+                    "o calidad de aire — pero SOLO para el estado ACTUAL. Para el "
+                    "HISTORIAL de estos componentes (ayer, una fecha, 'todo el dia', "
+                    "'esta semana') usa get_history_ubidots con el label de la "
+                    "variable (ej. temperatura2 = calentador solar)."
                 ),
                 "parameters": {
                     "type": "object",
@@ -866,14 +898,20 @@ class AgentService:
     def _tool_generate_report(self, args: dict) -> dict:
         """Genera un PDF ejecutivo. Devuelve metadata para el cliente +
         un payload reducido al LLM (sin el PDF binario)."""
-        # Resolver rango
+        # Resolver rango. Solo usamos `hours` si es un numero POSITIVO; un
+        # hours=0 (que a veces el LLM manda como relleno junto a start_iso/
+        # end_iso) NO debe ganarle al rango ISO ni colapsar a "hoy".
         now = time.time()
-        if args.get("hours") is not None:
+        hours_arg = args.get("hours")
+        hours_val = None
+        if hours_arg is not None:
             try:
-                hours = float(args["hours"])
+                hours_val = float(hours_arg)
             except (TypeError, ValueError):
                 return {"error": "hours debe ser numerico"}
-            hours = max(0.1, min(hours, 744))  # 31 dias max
+
+        if hours_val and hours_val > 0:
+            hours = max(0.1, min(hours_val, 744))  # 31 dias max
             start_ts = now - hours * 3600
             end_ts = now
         elif args.get("start_iso") and args.get("end_iso"):
@@ -893,6 +931,11 @@ class AgentService:
             return {"error": "rango maximo 31 dias"}
 
         title = args.get("title")
+
+        # Alinear el inicio al día local (00:00) para que el heatmap empiece a
+        # las 00:00 y el filename del PDF coincida con el periodo recolectado.
+        from app.reports.collector import floor_to_local_midnight
+        start_ts = floor_to_local_midnight(start_ts)
 
         # Llamamos al mismo path que el endpoint REST
         from app.reports.collector import collect_period_data
@@ -1127,7 +1170,7 @@ class AgentService:
                     f"NO cubre todo el periodo de {hours:.0f}h solicitado. Los sensores "
                     f"{sensors} estan abnormal AHORA. Para saber DESDE CUANDO la humedad "
                     "esta fuera de rango, usa get_history_ubidots(var='h1', hours=24) "
-                    "y busca el primer punto bajo el umbral (60% para HUM, 15-30°C para TEMP)."
+                    "y busca el primer punto bajo el umbral (60% para HUM, 20-30°C para TEMP)."
                 )
             else:
                 interpretation = (
@@ -1190,10 +1233,14 @@ class AgentService:
         vmax = max(values)
         vavg = sum(values) / n
 
-        # Detectar transiciones de estado en el time series. Para sensores
-        # interiores aplicamos el umbral del grupo; para tex/hex no aplica.
+        # Detectar transiciones de estado en el time series. Solo los sensores
+        # INTERIORES del cuarto (t1..t5, h1..h5) tienen rango optimo; tex/hex y
+        # las variables de infraestructura (temperatura1..5, m2, amoniaco, etc.)
+        # son informativas y NO se evaluan contra umbral.
         # Devolvemos un resumen ASI el LLM no tiene que escanear muestras.
-        is_interior = var not in ("tex", "hex") and not predicted
+        _INTERIOR_SENSORS = {"t1", "t2", "t3", "t4", "t5",
+                             "h1", "h2", "h3", "h4", "h5"}
+        is_interior = var in _INTERIOR_SENSORS and not predicted
         threshold_summary = None
         first_abnormal_ts_iso = None
         first_abnormal_after_normal_ts_iso = None

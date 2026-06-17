@@ -192,15 +192,18 @@ async def post_reports_generate(request: Request):
     if not isinstance(body, dict):
         return JSONResponse({"error": "body debe ser objeto"}, status_code=400)
 
-    # Resolver rango temporal
+    # Resolver rango temporal. Solo usamos `hours` si es POSITIVO; un hours=0
+    # (relleno que a veces llega junto a start_iso/end_iso) cae al rango ISO.
     now = time.time()
-    if "hours" in body:
+    hours_val = None
+    if body.get("hours") is not None:
         try:
-            hours = float(body["hours"])
+            hours_val = float(body["hours"])
         except (TypeError, ValueError):
             return JSONResponse({"error": "hours debe ser numerico"}, status_code=400)
+    if hours_val and hours_val > 0:
         end_ts = now
-        start_ts = now - hours * 3600
+        start_ts = now - hours_val * 3600
     elif "start_iso" in body and "end_iso" in body:
         try:
             from datetime import datetime
@@ -240,6 +243,11 @@ def _generate_report_sync(start_ts: float, end_ts: float,
     from app.reports.collector import collect_period_data
     from app.reports.charts import generate_all_charts
     from app.reports.render import render_pdf, save_pdf, generate_preview_png
+
+    # Alinear el inicio al día local (00:00) para que el filename del PDF
+    # coincida con el periodo realmente recolectado (el collector hace lo mismo).
+    from app.reports.collector import floor_to_local_midnight
+    start_ts = floor_to_local_midnight(start_ts)
 
     data = collect_period_data(service, start_ts, end_ts)
     charts = generate_all_charts(data)
