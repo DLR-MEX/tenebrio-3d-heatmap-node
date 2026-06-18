@@ -2,7 +2,8 @@
 name = "tenebris-ai-sentinel"
 version = "0.1.0"
 description = "Servicio de prediccion en tiempo real (GRU dual) para cuarto de cria de tenebrios."
-readme = "../docs/ai-predictor.md"
+# Nota: el README vive en ../docs/ai-predictor.md (fuera del paquete). setuptools moderno
+# rechaza leer rutas fuera del project root al construir el wheel, así que no se declara aquí.
 requires-python = ">=3.12"
 dependencies = [
     "apscheduler>=3.10",
