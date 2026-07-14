@@ -1,47 +1,45 @@
-// Cliente SSE hacia el sidecar Python (proxy en /api/predictor/stream).
-// Reconecta automáticamente con backoff simple. No expone credenciales —
-// el endpoint es del mismo origen, el token Ubidots vive solo en Python.
+// Polling hacia el sidecar Python (proxy en /api/predictor/state).
+// Antes usaba SSE (EventSource) contra /api/predictor/stream, pero los
+// tuneles "quick" de Cloudflare (trycloudflare.com) bufferean la respuesta
+// hasta que termina, y un stream SSE nunca termina -> nunca llegaba nada.
+// /api/predictor/state devuelve el mismo snapshot como JSON normal, que si
+// atraviesa el tunel sin problema. No expone credenciales — el endpoint es
+// del mismo origen, el token Ubidots vive solo en Python.
 
-const RECONNECT_MS = 2000;
+const POLL_MS = 4000;
 
-let es = null;
 let onSnapshotFn = null;
-let onUpdateFn = null;
 let onStatusFn = null;
+let timer = null;
 let stopped = false;
 
 export function connectStream({ onSnapshot, onUpdate, onStatus }) {
     onSnapshotFn = onSnapshot;
-    onUpdateFn = onUpdate;
     onStatusFn = onStatus;
     stopped = false;
-    open();
+    poll();
 }
 
 export function disconnectStream() {
     stopped = true;
-    if (es) {
-        try { es.close(); } catch {}
-        es = null;
+    if (timer) {
+        clearTimeout(timer);
+        timer = null;
     }
 }
 
-function open() {
+async function poll() {
     if (stopped) return;
-    es = new EventSource('/api/predictor/stream');
-
-    es.addEventListener('snapshot', (e) => {
-        try { onSnapshotFn?.(JSON.parse(e.data)); } catch (err) { console.error('[predictor] snapshot parse', err); }
-    });
-    es.addEventListener('update', (e) => {
-        try { onUpdateFn?.(JSON.parse(e.data)); } catch (err) { console.error('[predictor] update parse', err); }
-    });
-    es.addEventListener('ping', () => {});
-    es.onopen = () => onStatusFn?.({ connected: true, label: 'online' });
-    es.onerror = () => {
+    try {
+        const resp = await fetch('/api/predictor/state');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        onStatusFn?.({ connected: true, label: 'online' });
+        onSnapshotFn?.(data);
+    } catch (err) {
+        console.error('[predictor] poll error', err);
         onStatusFn?.({ connected: false, label: 'reconectando…' });
-        try { es?.close(); } catch {}
-        es = null;
-        if (!stopped) setTimeout(open, RECONNECT_MS);
-    };
+    } finally {
+        if (!stopped) timer = setTimeout(poll, POLL_MS);
+    }
 }
