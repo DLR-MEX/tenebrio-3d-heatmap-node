@@ -35,7 +35,7 @@ async function loadHistory(onFrame) {
     btn.textContent = 'Cargando...';
 
     try {
-        const resp = await fetch(`/api/history?start=${startVal}&end=${endVal}`);
+        const resp = await fetch(`api/history?start=${startVal}&end=${endVal}`);
         if (!resp.ok) throw new Error('Error');
         historyData = await resp.json();
 
@@ -112,7 +112,7 @@ async function renderHistoryFrame(ts, onFrame) {
             temps: JSON.stringify(tempValues),
             hums: JSON.stringify(humValues),
         });
-        const resp = await fetch('/api/history/interpolate?' + params);
+        const resp = await fetch('api/history/interpolate?' + params);
         if (!resp.ok) return;
         const volumes = await resp.json();
 

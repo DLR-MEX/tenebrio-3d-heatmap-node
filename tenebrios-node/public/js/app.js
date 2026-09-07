@@ -25,7 +25,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 
     // Cargar configuracion desde el backend (refresh_ms)
     try {
-        const resp = await fetch('/api/config');
+        const resp = await fetch('api/config');
         if (resp.ok) {
             const cfg = await resp.json();
             if (cfg.refresh_ms) REFRESH_MS = cfg.refresh_ms;
@@ -182,7 +182,7 @@ async function fetchData() {
     const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
     try {
-        const resp = await fetch('/api/data', { signal: controller.signal });
+        const resp = await fetch('api/data', { signal: controller.signal });
         clearTimeout(timeoutId);
         if (!resp.ok) throw new Error('API error');
         const data = await resp.json();

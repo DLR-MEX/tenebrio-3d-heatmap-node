@@ -94,7 +94,7 @@ export function createApp() {
     // del navegador cada vez que se reinicia el servidor.
     let html = fs.readFileSync(path.join(PUBLIC_DIR, 'index.html'), 'utf-8');
     html = html.replace(/(src|href)="\/(js|css)\/([^"]+)"/g,
-      (_, attr, dir, file) => `${attr}="/${dir}/${file}?v=${BUILD_VERSION}"`);
+      (_, attr, dir, file) => `${attr}="${dir}/${file}?v=${BUILD_VERSION}"`);
     res.set('Content-Type', 'text/html; charset=utf-8');
     res.set('Cache-Control', 'no-store');
     res.send(html);

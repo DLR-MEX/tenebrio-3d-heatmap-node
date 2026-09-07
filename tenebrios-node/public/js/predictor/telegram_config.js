@@ -9,9 +9,9 @@
 //     real en backend.
 
 const API = {
-    get: '/api/predictor/telegram',
-    post: '/api/predictor/telegram',
-    test: '/api/predictor/telegram/test',
+    get: 'api/predictor/telegram',
+    post: 'api/predictor/telegram',
+    test: 'api/predictor/telegram/test',
 };
 
 let modal = null;

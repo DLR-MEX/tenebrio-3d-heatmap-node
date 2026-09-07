@@ -31,7 +31,7 @@ export function disconnectStream() {
 async function poll() {
     if (stopped) return;
     try {
-        const resp = await fetch('/api/predictor/state');
+        const resp = await fetch('api/predictor/state');
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
         onStatusFn?.({ connected: true, label: 'online' });

@@ -3,7 +3,7 @@
 // Historial vive en localStorage (max 30 mensajes); cada turno
 // reenvia el history al backend (el LLM no tiene memoria propia).
 
-const ENDPOINT = '/api/predictor/agent/chat';
+const ENDPOINT = 'api/predictor/agent/chat';
 const STORAGE_KEY = 'ai-chat-history-v1';
 const MAX_HISTORY = 30;
 const REQUEST_TIMEOUT_MS = 205000;
@@ -204,7 +204,7 @@ function renderReportCardInto(parentEl, report) {
     // El sidecar devuelve URLs tipo "/api/reports/<id>" (sidecar-local).
     // Express las expone bajo "/api/predictor/reports/<id>" — convertimos.
     const toProxyUrl = (sidecarUrl) =>
-        sidecarUrl ? sidecarUrl.replace(/^\/api\/reports/, '/api/predictor/reports') : null;
+        sidecarUrl ? sidecarUrl.replace(/^\/api\/reports/, 'api/predictor/reports') : null;
     const downloadUrl = toProxyUrl(report.url);
     const previewUrl = toProxyUrl(report.preview_url);
     const summary = report.summary || {};
